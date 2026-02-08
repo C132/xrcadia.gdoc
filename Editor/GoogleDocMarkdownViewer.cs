@@ -92,12 +92,21 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             
             bool inCodeBlock = false;
             string codeBlockContent = "";
+            List<string> tableLines = new List<string>();
 
             foreach (var line in lines)
             {
+                var trimmedLine = line.Trim();
+
                 // Code blocks
-                if (line.TrimStart().StartsWith("```"))
+                if (trimmedLine.StartsWith("```"))
                 {
+                    if (tableLines.Count > 0)
+                    {
+                        scroll.Add(CreateTable(tableLines));
+                        tableLines.Clear();
+                    }
+
                     if (inCodeBlock)
                     {
                         scroll.Add(CreateCodeBlock(codeBlockContent.TrimEnd()));
@@ -117,59 +126,55 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     continue;
                 }
 
-                // Headers
-                if (line.StartsWith("#"))
+                // Table detection (very basic)
+                if (trimmedLine.StartsWith("|") && trimmedLine.EndsWith("|") && trimmedLine.Contains("|"))
                 {
-                    scroll.Add(CreateHeader(line));
+                    tableLines.Add(trimmedLine);
+                    continue;
+                }
+                else if (tableLines.Count > 0)
+                {
+                    scroll.Add(CreateTable(tableLines));
+                    tableLines.Clear();
+                }
+
+                // Headers
+                if (trimmedLine.StartsWith("#"))
+                {
+                    scroll.Add(CreateHeader(trimmedLine));
                     continue;
                 }
 
                 // Horizontal Rule
-                if (line.Trim() == "---" || line.Trim() == "***" || line.Trim() == "___")
+                if (trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___")
                 {
                     scroll.Add(CreateHorizontalRule());
                     continue;
                 }
 
-                // Reference style images: ![][ref]
-                var imgRefMatch = Regex.Match(line.Trim(), @"^!\[(.*)\]\[(.*)\]$");
-                if (imgRefMatch.Success)
+                // Images (possibly linked)
+                if (TryMatchImage(trimmedLine, out var imgPath, out var altText))
                 {
-                    string alt = imgRefMatch.Groups[1].Value;
-                    string refKey = imgRefMatch.Groups[2].Value;
-                    if (string.IsNullOrEmpty(refKey)) refKey = alt; // Handle ![ref][]
-                    
-                    if (_references.TryGetValue(refKey, out var imgPath))
-                    {
-                        scroll.Add(CreateImage(imgPath, alt));
-                        continue;
-                    }
-                }
-
-                // Inline style images: ![alt](path)
-                var imgInlineMatch = Regex.Match(line.Trim(), @"^!\[(.*)\]\((.*)\)$");
-                if (imgInlineMatch.Success)
-                {
-                    scroll.Add(CreateImage(imgInlineMatch.Groups[2].Value, imgInlineMatch.Groups[1].Value));
+                    scroll.Add(CreateImage(imgPath, altText));
                     continue;
                 }
 
                 // Lists
-                if (line.TrimStart().StartsWith("- ") || line.TrimStart().StartsWith("* ") || Regex.IsMatch(line.TrimStart(), @"^\d+\. "))
+                if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("* ") || Regex.IsMatch(trimmedLine, @"^\d+\. "))
                 {
-                    scroll.Add(CreateListItem(line));
+                    scroll.Add(CreateListItem(line)); // Keep original indentation/line for lists
                     continue;
                 }
 
                 // Blockquotes
-                if (line.TrimStart().StartsWith("> "))
+                if (trimmedLine.StartsWith("> "))
                 {
-                    scroll.Add(CreateBlockquote(line));
+                    scroll.Add(CreateBlockquote(line)); // Keep original for blockquote
                     continue;
                 }
 
                 // Reference definitions (skip)
-                if (Regex.IsMatch(line, @"^\[.*\]:"))
+                if (Regex.IsMatch(trimmedLine, @"^\[.*\]:"))
                 {
                     continue;
                 }
@@ -185,12 +190,147 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     scroll.Add(spacer);
                 }
             }
+
+            if (tableLines.Count > 0)
+            {
+                scroll.Add(CreateTable(tableLines));
+            }
+        }
+
+        private VisualElement CreateTable(List<string> rows)
+        {
+            var table = new VisualElement();
+            table.style.marginTop = 10;
+            table.style.marginBottom = 10;
+            table.style.borderTopWidth = 1;
+            table.style.borderBottomWidth = 1;
+            table.style.borderLeftWidth = 1;
+            table.style.borderRightWidth = 1;
+            table.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f);
+            table.style.borderBottomColor = new Color(0.3f, 0.3f, 0.3f);
+            table.style.borderLeftColor = new Color(0.3f, 0.3f, 0.3f);
+            table.style.borderRightColor = new Color(0.3f, 0.3f, 0.3f);
+            table.style.backgroundColor = new Color(0.22f, 0.22f, 0.22f);
+
+            if (rows.Count == 0) return table;
+
+            // Check for separator row at index 1
+            bool hasHeader = rows.Count > 1 && Regex.IsMatch(rows[1], @"^\|[\s\-:|]+\|$");
+            
+            int startIdx = 0;
+            if (hasHeader)
+            {
+                table.Add(CreateTableRow(rows[0], true));
+                startIdx = 2; // Skip header and separator
+            }
+
+            for (int i = startIdx; i < rows.Count; i++)
+            {
+                table.Add(CreateTableRow(rows[i], false));
+            }
+
+            return table;
+        }
+
+        private VisualElement CreateTableRow(string row, bool isHeader)
+        {
+            var rowElement = new VisualElement();
+            rowElement.style.flexDirection = FlexDirection.Row;
+            if (isHeader)
+                rowElement.style.backgroundColor = new Color(0.28f, 0.28f, 0.28f);
+            
+            rowElement.style.borderBottomWidth = 1;
+            rowElement.style.borderBottomColor = new Color(0.3f, 0.3f, 0.3f);
+
+            // Split and remove leading/trailing empty strings from the outer pipes
+            var cellTexts = row.Trim('|').Split('|');
+            foreach (var cellText in cellTexts)
+            {
+                var cell = new VisualElement();
+                cell.style.flexGrow = 1;
+                cell.style.flexBasis = 0;
+                cell.style.paddingLeft = 8;
+                cell.style.paddingRight = 8;
+                cell.style.paddingTop = 6;
+                cell.style.paddingBottom = 6;
+                cell.style.borderRightWidth = 1;
+                cell.style.borderRightColor = new Color(0.3f, 0.3f, 0.3f);
+                
+                ProcessCellContent(cell, cellText, isHeader);
+                rowElement.Add(cell);
+            }
+
+            return rowElement;
+        }
+
+        private void ProcessCellContent(VisualElement cell, string content, bool isHeader)
+        {
+            content = content.Trim();
+            if (string.IsNullOrWhiteSpace(content)) return;
+
+            if (TryMatchImage(content, out var imgPath, out var altText))
+            {
+                cell.Add(CreateImage(imgPath, altText));
+            }
+            else
+            {
+                var label = new Label(ProcessRichText(content));
+                label.enableRichText = true;
+                label.style.whiteSpace = WhiteSpace.Normal;
+                label.style.fontSize = 12;
+                label.style.color = new Color(0.85f, 0.85f, 0.85f);
+                if (isHeader) label.style.unityFontStyleAndWeight = FontStyle.Bold;
+                cell.Add(label);
+            }
+        }
+
+        private bool TryMatchImage(string line, out string path, out string alt)
+        {
+            path = null;
+            alt = null;
+
+            if (string.IsNullOrEmpty(line)) return false;
+
+            // Handle linked images: [![alt][ref]](url) or [![alt](path)](url)
+            // We strip the outer link and look at the inner content
+            var linkedMatch = Regex.Match(line, @"^\[\s*(!\[.*?\]\s*(?:\[.*?\]|\(.*?\)))\s*\]\(.*?\)$");
+            if (linkedMatch.Success)
+            {
+                line = linkedMatch.Groups[1].Value.Trim();
+            }
+
+            // Reference style: ![alt][ref] or ![][ref] or ![ref][]
+            var refMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\[(?<ref>.*?)\]$");
+            if (refMatch.Success)
+            {
+                alt = refMatch.Groups["alt"].Value;
+                string refKey = refMatch.Groups["ref"].Value;
+                if (string.IsNullOrEmpty(refKey)) refKey = alt;
+                
+                if (_references.TryGetValue(refKey, out path))
+                {
+                    return true;
+                }
+            }
+
+            // Inline style: ![alt](path)
+            var inlineMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\((?<path>.*?)\)$");
+            if (inlineMatch.Success)
+            {
+                alt = inlineMatch.Groups["alt"].Value;
+                path = inlineMatch.Groups["path"].Value;
+                return true;
+            }
+
+            return false;
         }
 
         private void ParseReferences()
         {
             _references.Clear();
-            var matches = Regex.Matches(_content, @"^\[([^\]]+)\]:\s*(.+)$", RegexOptions.Multiline);
+            // Match [id]: path (handles optional <path> and optional title)
+            // Added \s* at the beginning because Google Docs often indents these.
+            var matches = Regex.Matches(_content, @"^\s*\[([^\]]+)\]:\s*<?([^>\s]+)>?(?:\s+[""(].*?["")])?\s*$", RegexOptions.Multiline);
             foreach (Match m in matches)
             {
                 _references[m.Groups[1].Value] = m.Groups[2].Value.Trim();

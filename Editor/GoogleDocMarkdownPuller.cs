@@ -349,8 +349,8 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             string imagesFolderPath = Path.Combine(directory, imagesFolderRelative);
 
             // Match reference-style base64 images: [image1]: <data:image/png;base64,...>
-            // We use multiline to match ^ at the start of each line.
-            var regex = new Regex(@"^\[([^\]]+)\]: <?data:image\/(png|jpeg|gif|webp|svg\+xml);base64,([^>\s]+)>?",
+            // We use multiline to match ^ at the start of each line (allowing optional indentation).
+            var regex = new Regex(@"^\s*\[([^\]]+)\]:\s*<?data:image\/(png|jpeg|gif|webp|svg\+xml);base64,([^>\s]+)>?",
                 RegexOptions.Multiline);
 
             var matches = regex.Matches(markdown);
