@@ -4,7 +4,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 {
     internal static class GoogleDocMarkdownMenu
     {
-        [MenuItem("Tools/Google Doc Markdown/Getting Started", priority = 0)]
+        [MenuItem("Tools/Google Doc Markdown/Settings", priority = 0)]
         private static void ShowWizard()
         {
             GoogleDocMarkdownWizard.ShowWindow();

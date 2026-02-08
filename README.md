@@ -1,30 +1,29 @@
 # Google Doc Markdown
 
-An editor-only Unity package that pulls a public Google Doc as Markdown and writes it to a file inside your project for AI agent reference.
+An editor-only Unity package that pulls public Google Docs as Markdown and writes them to files inside your project for AI agent reference.
 
 ## What it does
-- Stores a Google Doc URL or ID in a ScriptableObject asset.
+- Manages multiple Google Doc sources from a single centralized settings asset.
 - Downloads Markdown from Google Docs and writes it to a configured output path.
-- Optionally auto-pulls on editor startup with a minimum interval.
+- Automatically extracts and saves images from the doc to a local project folder.
+- Optionally auto-pulls on editor startup with a configurable minimum interval.
 
 ## Quick Start
-1. Open the wizard: `Tools/Google Doc Markdown/Getting Started`.
-2. Follow the instructions in the window to create and configure your sources.
+1. Open the settings window: `Tools/Google Doc Markdown/Settings`.
+2. Click **+ Add New Source**.
+3. Enter the **Google Doc URL** or raw document ID.
+4. Set the **Output Path** (e.g., `Assets/Documentation/MyDoc.md`).
+5. Click **Pull** on the source item, or **Pull All Sources Now** at the bottom.
 
-## Create a source asset (Manual)
-1. In the Project window, use `Assets/Create/Google Doc Markdown/Source`.
-2. Enter the Google Doc URL or raw document ID.
-3. Set an output path relative to the Unity project root.
+## Configuration
+- **Auto Pull On Editor Startup**: If enabled, the tool checks all sources whenever the Unity project is opened.
+- **Interval (minutes)**: Minimum time to wait between automatic pulls to avoid redundant network traffic.
+- **Output Path**: Relative to the Unity project root. Example: `Assets/Documentation/Design.md`.
 
-## Configure output path
-- `outputPath` is relative to the Unity project root (the folder containing `Assets/`).
-- Example: `Docs/Design.md` writes to `<Project>/Docs/Design.md`.
-- If you want the file inside the Assets folder, use `Assets/Docs/Design.md`.
-
-## Pulling
-- Click `Pull Now` in the asset inspector.
-- Or use the menu item: `Tools/Google Doc Markdown/Pull All Sources`.
+## Features
+- **Image Handling**: Base64-encoded images in Google Docs are automatically saved as PNG/JPG files in a `[DocName]_images` folder next to your Markdown file.
+- **Automatic Renaming**: If you use the default `Design.md` path, the tool will automatically rename the file to match the Google Doc's title on the first successful pull.
 
 ## Notes
-- Google Docs must be public to export Markdown unless OAuth is added.
-- Line endings are normalized to `\n`, and trailing whitespace is trimmed.
+- **Public Access**: Google Docs must be shared as "Anyone with the link can view" for the export tool to work without OAuth.
+- **Line Endings**: Line endings are normalized to `\n`, and trailing whitespace is trimmed for cleaner diffs.

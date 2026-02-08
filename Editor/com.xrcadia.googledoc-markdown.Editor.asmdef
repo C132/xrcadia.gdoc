@@ -1,16 +1,18 @@
 {
-  "name": "Xrcadia.GoogleDocMarkdown.Editor",
-  "rootNamespace": "Xrcadia.GoogleDocMarkdown.Editor",
-  "references": [],
-  "includePlatforms": [
-    "Editor"
-  ],
-  "excludePlatforms": [],
-  "allowUnsafeCode": false,
-  "overrideReferences": false,
-  "precompiledReferences": [],
-  "autoReferenced": true,
-  "defineConstraints": [],
-  "versionDefines": [],
-  "noEngineReferences": false
+    "name": "Xrcadia.GoogleDocMarkdown.Editor",
+    "rootNamespace": "Xrcadia.GoogleDocMarkdown.Editor",
+    "references": [
+        "GUID:2bafac87e7f4b9b418d9448d219b01ab"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }

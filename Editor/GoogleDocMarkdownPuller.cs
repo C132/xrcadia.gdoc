@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -17,14 +18,15 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
         public static void PullAllSources(bool onlyAutoPullEnabled)
         {
-            var sources = FindSources();
-            if (sources.Count == 0)
+            var settings = GoogleDocMarkdownSettings.GetOrCreateSettings();
+            var sources = settings.sources;
+            if (sources == null || sources.Count == 0)
             {
                 return;
             }
 
             var nowUtc = DateTime.UtcNow;
-            var toPull = new List<GoogleDocMarkdownSource>();
+            var toPull = new List<GoogleDocMarkdownSettings.SourceConfig>();
             foreach (var source in sources)
             {
                 if (source == null)
@@ -32,7 +34,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     continue;
                 }
 
-                if (!onlyAutoPullEnabled || ShouldAutoPull(source, nowUtc))
+                if (!onlyAutoPullEnabled || ShouldAutoPull(source, nowUtc, settings))
                 {
                     toPull.Add(source);
                 }
@@ -43,26 +45,27 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 return;
             }
 
-            QueueJobs(toPull);
+            QueueJobs(toPull, settings);
         }
 
-        public static void PullSource(GoogleDocMarkdownSource source)
+        public static void PullSource(GoogleDocMarkdownSettings.SourceConfig config)
         {
-            if (source == null)
+            if (config == null)
             {
                 return;
             }
 
-            QueueJobs(new List<GoogleDocMarkdownSource> { source });
+            var settings = GoogleDocMarkdownSettings.GetOrCreateSettings();
+            QueueJobs(new List<GoogleDocMarkdownSettings.SourceConfig> { config }, settings);
         }
 
-        private static void QueueJobs(IReadOnlyList<GoogleDocMarkdownSource> sources)
+        private static void QueueJobs(IReadOnlyList<GoogleDocMarkdownSettings.SourceConfig> configs, GoogleDocMarkdownSettings settings)
         {
-            var total = sources.Count;
+            var total = configs.Count;
             for (int i = 0; i < total; i++)
             {
                 var labelSuffix = total > 1 ? $" ({i + 1}/{total})" : string.Empty;
-                PendingJobs.Enqueue(new PullJob(sources[i], labelSuffix));
+                PendingJobs.Enqueue(new PullJob(configs[i], settings, labelSuffix));
             }
 
             StartQueue();
@@ -83,16 +86,16 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             while (PendingJobs.Count > 0)
             {
                 var job = PendingJobs.Dequeue();
-                if (job.Source == null)
+                if (job.Config == null)
                 {
                     continue;
                 }
 
-                SetStatus(job.Source, string.Empty, false);
+                SetStatus(job.Config, job.Settings, string.Empty, false);
                 if (!job.TryStart(out var error))
                 {
-                    SetStatus(job.Source, error, false);
-                    Debug.LogError(error, job.Source);
+                    SetStatus(job.Config, job.Settings, error, false);
+                    Debug.LogError(error, job.Settings);
                     continue;
                 }
 
@@ -116,7 +119,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 return;
             }
 
-            if (activeJob.Source == null)
+            if (activeJob.Config == null)
             {
                 FinalizeJob(activeJob);
                 return;
@@ -129,9 +132,10 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 return;
             }
 
+            var label = string.IsNullOrEmpty(activeJob.Config.name) ? "Unnamed Source" : activeJob.Config.name;
             EditorUtility.DisplayProgressBar(
                 ProgressTitle,
-                $"Downloading {activeJob.Source.name}{activeJob.LabelSuffix}",
+                $"Downloading {label}{activeJob.LabelSuffix}",
                 activeJob.Operation.progress);
 
             if (!activeJob.Operation.isDone)
@@ -147,7 +151,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             try
             {
-                if (job.Source == null)
+                if (job.Config == null)
                 {
                     return;
                 }
@@ -160,22 +164,53 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 }
 
                 var markdown = NormalizeMarkdown(job.Request.downloadHandler.text);
+
+                // Attempt to get filename from headers if we are using the default name
+                var headerFilename = GetFilenameFromHeaders(job.Request);
+                if (!string.IsNullOrEmpty(headerFilename))
+                {
+                    if (!headerFilename.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                    {
+                        headerFilename += ".md";
+                    }
+
+                    var currentPath = job.Config.outputPath.Replace('\\', '/');
+                    var isDefault = currentPath == "Docs/Design.md" || 
+                                   currentPath == "Assets/Documentation/Design.md" || 
+                                   currentPath.EndsWith("/");
+
+                    if (isDefault)
+                    {
+                        var dir = Path.GetDirectoryName(currentPath);
+                        var newOutputPath = Path.Combine(dir ?? string.Empty, headerFilename).Replace('\\', '/');
+                        
+                        if (job.Config.outputPath != newOutputPath)
+                        {
+                            job.Config.outputPath = newOutputPath;
+                            job.FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), newOutputPath));
+                        }
+                    }
+                }
+
+                markdown = ProcessImages(markdown, job.FullPath);
+                
                 var directory = Path.GetDirectoryName(job.FullPath);
                 if (!string.IsNullOrEmpty(directory))
                 {
                     Directory.CreateDirectory(directory);
                 }
 
+                var label = string.IsNullOrEmpty(job.Config.name) ? "Unnamed Source" : job.Config.name;
                 EditorUtility.DisplayProgressBar(
                     ProgressTitle,
-                    $"Saving {job.Source.name}{job.LabelSuffix}",
+                    $"Saving {label}{job.LabelSuffix}",
                     1f);
 
                 File.WriteAllText(job.FullPath, markdown, new UTF8Encoding(false));
                 AssetDatabase.Refresh();
 
-                SetStatus(job.Source, string.Empty, true);
-                Debug.Log($"Google Doc Markdown pulled to {job.Source.outputPath}", job.Source);
+                SetStatus(job.Config, job.Settings, string.Empty, true);
+                Debug.Log($"Google Doc Markdown pulled to {job.Config.outputPath}", job.Settings);
             }
             catch (Exception ex)
             {
@@ -185,10 +220,10 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
         private static void HandleFailure(PullJob job, string message)
         {
-            if (job.Source != null)
+            if (job.Config != null)
             {
-                SetStatus(job.Source, message, false);
-                Debug.LogError(message, job.Source);
+                SetStatus(job.Config, job.Settings, message, false);
+                Debug.LogError(message, job.Settings);
             }
         }
 
@@ -200,33 +235,33 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             StartNextJob();
         }
 
-        private static void SetStatus(GoogleDocMarkdownSource source, string error, bool success)
+        private static void SetStatus(GoogleDocMarkdownSettings.SourceConfig config, GoogleDocMarkdownSettings settings, string error, bool success)
         {
-            source.lastError = error ?? string.Empty;
+            config.lastError = error ?? string.Empty;
             if (success)
             {
-                source.lastPulledUtcIso = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                config.lastPulledUtcIso = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             }
 
-            EditorUtility.SetDirty(source);
+            EditorUtility.SetDirty(settings);
             AssetDatabase.SaveAssets();
         }
 
-        private static bool ShouldAutoPull(GoogleDocMarkdownSource source, DateTime nowUtc)
+        private static bool ShouldAutoPull(GoogleDocMarkdownSettings.SourceConfig config, DateTime nowUtc, GoogleDocMarkdownSettings settings)
         {
-            if (!source.autoPullOnEditorStartup)
+            if (!settings.autoPullOnEditorStartup)
             {
                 return false;
             }
 
-            var minMinutes = Math.Max(0, source.minimumMinutesBetweenAutoPulls);
-            if (minMinutes == 0 || string.IsNullOrWhiteSpace(source.lastPulledUtcIso))
+            var minMinutes = Math.Max(0, settings.minimumMinutesBetweenAutoPulls);
+            if (minMinutes == 0 || string.IsNullOrWhiteSpace(config.lastPulledUtcIso))
             {
                 return true;
             }
 
             if (!DateTime.TryParse(
-                    source.lastPulledUtcIso,
+                    config.lastPulledUtcIso,
                     CultureInfo.InvariantCulture,
                     DateTimeStyles.RoundtripKind,
                     out var lastPulledUtc))
@@ -296,6 +331,78 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
         }
 
+        private static string ProcessImages(string markdown, string markdownFilePath)
+        {
+            if (string.IsNullOrEmpty(markdown))
+            {
+                return markdown;
+            }
+
+            string fileName = Path.GetFileNameWithoutExtension(markdownFilePath);
+            string directory = Path.GetDirectoryName(markdownFilePath);
+            if (string.IsNullOrEmpty(directory))
+            {
+                return markdown;
+            }
+
+            string imagesFolderRelative = fileName + "_images";
+            string imagesFolderPath = Path.Combine(directory, imagesFolderRelative);
+
+            // Match reference-style base64 images: [image1]: <data:image/png;base64,...>
+            // We use multiline to match ^ at the start of each line.
+            var regex = new Regex(@"^\[([^\]]+)\]: <?data:image\/(png|jpeg|gif|webp|svg\+xml);base64,([^>\s]+)>?",
+                RegexOptions.Multiline);
+
+            var matches = regex.Matches(markdown);
+            if (matches.Count == 0)
+            {
+                return markdown;
+            }
+
+            try
+            {
+                if (!Directory.Exists(imagesFolderPath))
+                {
+                    Directory.CreateDirectory(imagesFolderPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Failed to create images directory '{imagesFolderPath}': {ex.Message}");
+                return markdown;
+            }
+
+            return regex.Replace(markdown, m =>
+            {
+                string imageId = m.Groups[1].Value;
+                string extension = m.Groups[2].Value;
+                string base64Data = m.Groups[3].Value;
+
+                // Map svg+xml to svg
+                if (extension == "svg+xml")
+                {
+                    extension = "svg";
+                }
+
+                string imageFileName = $"{imageId}.{extension}";
+                string imagePath = Path.Combine(imagesFolderPath, imageFileName);
+                // Use forward slashes for Markdown paths regardless of OS
+                string relativeImagePath = $"{imagesFolderRelative}/{imageFileName}";
+
+                try
+                {
+                    byte[] imageBytes = Convert.FromBase64String(base64Data);
+                    File.WriteAllBytes(imagePath, imageBytes);
+                    return $"[{imageId}]: {relativeImagePath}";
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Failed to process image '{imageId}': {ex.Message}");
+                    return m.Value; // Keep original if failed
+                }
+            });
+        }
+
         private static string NormalizeMarkdown(string input)
         {
             if (string.IsNullOrEmpty(input))
@@ -313,65 +420,84 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return string.Join("\n", lines);
         }
 
-        internal static List<GoogleDocMarkdownSource> FindSources()
+        private static string GetFilenameFromHeaders(UnityWebRequest request)
         {
-            var results = new List<GoogleDocMarkdownSource>();
-            var guids = AssetDatabase.FindAssets("t:GoogleDocMarkdownSource");
-            foreach (var guid in guids)
+            var cd = request.GetResponseHeader("Content-Disposition");
+            if (string.IsNullOrEmpty(cd)) return null;
+
+            // Try to match filename*=UTF-8''... (RFC 5987)
+            var matchUtf8 = Regex.Match(cd, @"filename\*=UTF-8''([^;\n]+)", RegexOptions.IgnoreCase);
+            if (matchUtf8.Success)
             {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                var source = AssetDatabase.LoadAssetAtPath<GoogleDocMarkdownSource>(path);
-                if (source != null)
-                {
-                    results.Add(source);
-                }
+                var fileName = UnityWebRequest.UnEscapeURL(matchUtf8.Groups[1].Value);
+                return SanitizeFilename(fileName);
             }
 
-            return results;
+            // Try to match filename="..."
+            var match = Regex.Match(cd, @"filename=[""']?([^;""'\n]+)[""']?", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                return SanitizeFilename(match.Groups[1].Value);
+            }
+
+            return null;
         }
+
+        private static string SanitizeFilename(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return fileName;
+            foreach (char c in Path.GetInvalidFileNameChars())
+            {
+                fileName = fileName.Replace(c, '_');
+            }
+            return fileName;
+        }
+
 
         private sealed class PullJob
         {
-            public PullJob(GoogleDocMarkdownSource source, string labelSuffix)
+            public PullJob(GoogleDocMarkdownSettings.SourceConfig config, GoogleDocMarkdownSettings settings, string labelSuffix)
             {
-                Source = source;
+                Config = config;
+                Settings = settings;
                 LabelSuffix = labelSuffix;
             }
 
-            public GoogleDocMarkdownSource Source { get; }
+            public GoogleDocMarkdownSettings.SourceConfig Config { get; }
+            public GoogleDocMarkdownSettings Settings { get; }
             public string LabelSuffix { get; }
             public UnityWebRequest Request { get; private set; }
             public UnityWebRequestAsyncOperation Operation { get; private set; }
-            public string FullPath { get; private set; }
+            public string FullPath { get; set; }
 
             public bool TryStart(out string error)
             {
                 error = string.Empty;
 
-                if (Source == null)
+                if (Config == null)
                 {
-                    error = "Source asset is missing.";
+                    error = "Source configuration is missing.";
                     return false;
                 }
 
-                if (!TryGetDocumentId(Source.googleDocUrlOrId, out var docId, out error))
+                if (!TryGetDocumentId(Config.googleDocUrlOrId, out var docId, out error))
                 {
                     return false;
                 }
 
-                if (string.IsNullOrWhiteSpace(Source.outputPath))
+                if (string.IsNullOrWhiteSpace(Config.outputPath))
                 {
                     error = "Output path is empty. Set a relative path like Docs/Design.md.";
                     return false;
                 }
 
-                if (Path.IsPathRooted(Source.outputPath))
+                if (Path.IsPathRooted(Config.outputPath))
                 {
                     error = "Output path must be relative to the Unity project root.";
                     return false;
                 }
 
-                FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), Source.outputPath));
+                FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), Config.outputPath));
                 var url = $"https://docs.google.com/document/d/{docId}/export?format=md";
                 Request = UnityWebRequest.Get(url);
                 Request.downloadHandler = new DownloadHandlerBuffer();
