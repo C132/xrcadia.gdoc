@@ -313,7 +313,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return string.Join("\n", lines);
         }
 
-        private static List<GoogleDocMarkdownSource> FindSources()
+        internal static List<GoogleDocMarkdownSource> FindSources()
         {
             var results = new List<GoogleDocMarkdownSource>();
             var guids = AssetDatabase.FindAssets("t:GoogleDocMarkdownSource");

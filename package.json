@@ -1,5 +1,5 @@
 {
-  "name": "com.xrcadia.xrcadia.gdoc",
+  "name": "com.xrcadia.gdoc",
   "version": "1.0.0",
   "displayName": "xrcadia.gdoc",
   "description": "Editor-only tool to pull public Google Docs as Markdown into your Unity project.",
@@ -10,8 +10,5 @@
     "markdown",
     "editor",
     "documentation"
-  ],
-  "author": {
-    "name": "xrcadia"
-  }
+  ]
 }

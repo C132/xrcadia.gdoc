@@ -7,7 +7,11 @@ An editor-only Unity package that pulls a public Google Doc as Markdown and writ
 - Downloads Markdown from Google Docs and writes it to a configured output path.
 - Optionally auto-pulls on editor startup with a minimum interval.
 
-## Create a source asset
+## Quick Start
+1. Open the wizard: `Tools/Google Doc Markdown/Getting Started`.
+2. Follow the instructions in the window to create and configure your sources.
+
+## Create a source asset (Manual)
 1. In the Project window, use `Assets/Create/Google Doc Markdown/Source`.
 2. Enter the Google Doc URL or raw document ID.
 3. Set an output path relative to the Unity project root.
