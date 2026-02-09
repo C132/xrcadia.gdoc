@@ -252,6 +252,18 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             var actions = new VisualElement();
             actions.style.flexDirection = FlexDirection.Row;
 
+            var viewBtn = new Button(() => {
+                var source = _settings.sources[index];
+                var filename = string.IsNullOrEmpty(source.name) ? "document.md" : source.name + ".md";
+                var fullPath = System.IO.Path.Combine(_settings.outputPath, filename).Replace('\\', '/');
+                GoogleDocMarkdownViewer.ShowWindow(fullPath);
+            }) {
+                text = "View",
+                tooltip = "View the rendered markdown document"
+            };
+            viewBtn.style.height = 20;
+            viewBtn.style.marginRight = 4;
+
             var pullBtn = new Button(() => GoogleDocMarkdownPuller.PullSource(_settings.sources[index])) {
                 text = "Pull",
                 tooltip = "Pull this document now"
@@ -266,6 +278,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             removeBtn.style.height = 20;
             removeBtn.style.color = new Color(0.9f, 0.3f, 0.3f);
 
+            actions.Add(viewBtn);
             actions.Add(pullBtn);
             actions.Add(removeBtn);
             headerRow.Add(actions);
