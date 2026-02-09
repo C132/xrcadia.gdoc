@@ -165,35 +165,24 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
                 var markdown = NormalizeMarkdown(job.Request.downloadHandler.text);
 
-                // Attempt to get filename from headers if we are using the default name
+                // Attempt to get filename from headers
                 var headerFilename = GetFilenameFromHeaders(job.Request);
-                if (!string.IsNullOrEmpty(headerFilename))
+                if (string.IsNullOrEmpty(headerFilename))
                 {
-                    if (!headerFilename.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                    {
-                        headerFilename += ".md";
-                    }
-
-                    var currentPath = job.Config.outputPath.Replace('\\', '/');
-                    var isDefault = currentPath == "Docs/Design.md" || 
-                                   currentPath == "Assets/Documentation/Design.md" || 
-                                   currentPath.EndsWith("/");
-
-                    if (isDefault)
-                    {
-                        var dir = Path.GetDirectoryName(currentPath);
-                        var newOutputPath = Path.Combine(dir ?? string.Empty, headerFilename).Replace('\\', '/');
-                        
-                        if (job.Config.outputPath != newOutputPath)
-                        {
-                            job.Config.outputPath = newOutputPath;
-                            job.FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), newOutputPath));
-                        }
-                    }
+                    headerFilename = string.IsNullOrEmpty(job.Config.name) ? "document.md" : job.Config.name + ".md";
+                }
+                else if (!headerFilename.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                {
+                    headerFilename += ".md";
                 }
 
+                // Combine output directory with filename
+                var outputDirectory = job.Settings.outputPath.Replace('\\', '/');
+                var fullOutputPath = Path.Combine(outputDirectory, headerFilename).Replace('\\', '/');
+                job.FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), fullOutputPath));
+
                 markdown = ProcessImages(markdown, job.FullPath);
-                
+
                 var directory = Path.GetDirectoryName(job.FullPath);
                 if (!string.IsNullOrEmpty(directory))
                 {
@@ -210,7 +199,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 AssetDatabase.Refresh();
 
                 SetStatus(job.Config, job.Settings, string.Empty, true);
-                Debug.Log($"Google Doc Markdown pulled to {job.Config.outputPath}", job.Settings);
+                Debug.Log($"Google Doc Markdown pulled to {fullOutputPath}", job.Settings);
             }
             catch (Exception ex)
             {
@@ -485,19 +474,18 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     return false;
                 }
 
-                if (string.IsNullOrWhiteSpace(Config.outputPath))
+                if (string.IsNullOrWhiteSpace(Settings.outputPath))
                 {
-                    error = "Output path is empty. Set a relative path like Docs/Design.md.";
+                    error = "Output path is empty. Set a relative path like Assets/Documentation.";
                     return false;
                 }
 
-                if (Path.IsPathRooted(Config.outputPath))
+                if (Path.IsPathRooted(Settings.outputPath))
                 {
                     error = "Output path must be relative to the Unity project root.";
                     return false;
                 }
 
-                FullPath = Path.GetFullPath(Path.Combine(GetProjectRoot(), Config.outputPath));
                 var url = $"https://docs.google.com/document/d/{docId}/export?format=md";
                 Request = UnityWebRequest.Get(url);
                 Request.downloadHandler = new DownloadHandlerBuffer();

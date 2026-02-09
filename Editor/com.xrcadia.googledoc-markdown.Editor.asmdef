@@ -1,9 +1,7 @@
 {
     "name": "Xrcadia.GoogleDocMarkdown.Editor",
     "rootNamespace": "Xrcadia.GoogleDocMarkdown.Editor",
-    "references": [
-        "GUID:2bafac87e7f4b9b418d9448d219b01ab"
-    ],
+    "references": [],
     "includePlatforms": [
         "Editor"
     ],

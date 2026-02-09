@@ -12,13 +12,13 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             public string name;
             public string googleDocUrlOrId;
-            public string outputPath = "Assets/Documentation/Design.md";
             public string lastPulledUtcIso;
             public string lastError;
         }
 
         public bool autoPullOnEditorStartup = true;
         public int minimumMinutesBetweenAutoPulls = 60;
+        public string outputPath = "Assets/Documentation";
         public List<SourceConfig> sources = new List<SourceConfig>();
 
         public static GoogleDocMarkdownSettings GetOrCreateSettings()

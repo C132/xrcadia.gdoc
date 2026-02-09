@@ -59,12 +59,16 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             var settingsGroup = CreateGroup("Configuration");
             var autoPullField = new PropertyField(_serializedSettings.FindProperty("autoPullOnEditorStartup"), "Auto Pull on Startup");
             autoPullField.tooltip = "If enabled, the tool will check all sources on editor startup.";
-            
+
             var minMinutesField = new PropertyField(_serializedSettings.FindProperty("minimumMinutesBetweenAutoPulls"), "Interval (minutes)");
             minMinutesField.tooltip = "Minimum time between automatic pulls to avoid excessive network requests.";
-            
+
+            var outputPathField = new PropertyField(_serializedSettings.FindProperty("outputPath"), "Output Directory");
+            outputPathField.tooltip = "Directory where all pulled markdown files will be saved (e.g. Assets/Documentation)";
+
             settingsGroup.Add(autoPullField);
             settingsGroup.Add(minMinutesField);
+            settingsGroup.Add(outputPathField);
             mainScroll.Add(settingsGroup);
 
             // Sources Section Header
@@ -248,45 +252,33 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             var actions = new VisualElement();
             actions.style.flexDirection = FlexDirection.Row;
 
-            var viewBtn = new Button(() => GoogleDocMarkdownViewer.ShowWindow(_settings.sources[index].outputPath)) { 
-                text = "View", 
-                tooltip = "View the rendered markdown document" 
-            };
-            viewBtn.style.height = 20;
-            viewBtn.style.marginRight = 4;
-            
-            var pullBtn = new Button(() => GoogleDocMarkdownPuller.PullSource(_settings.sources[index])) { 
-                text = "Pull", 
-                tooltip = "Pull this document now" 
+            var pullBtn = new Button(() => GoogleDocMarkdownPuller.PullSource(_settings.sources[index])) {
+                text = "Pull",
+                tooltip = "Pull this document now"
             };
             pullBtn.style.height = 20;
-            
-            var removeBtn = new Button(() => RemoveSource(index)) { 
-                text = "✕", 
-                tooltip = "Remove this source" 
+            pullBtn.style.marginRight = 4;
+
+            var removeBtn = new Button(() => RemoveSource(index)) {
+                text = "✕",
+                tooltip = "Remove this source"
             };
             removeBtn.style.height = 20;
-            removeBtn.style.marginLeft = 4;
             removeBtn.style.color = new Color(0.9f, 0.3f, 0.3f);
-            
-            actions.Add(viewBtn);
+
             actions.Add(pullBtn);
             actions.Add(removeBtn);
             headerRow.Add(actions);
             item.Add(headerRow);
 
-            // Content Area (URL and Path)
+            // Content Area (URL only)
             var contentArea = new VisualElement();
             contentArea.style.marginBottom = 4;
 
             var urlField = new PropertyField(property.FindPropertyRelative("googleDocUrlOrId"), "Doc URL / ID");
             urlField.tooltip = "Enter the full Google Doc URL or just the Document ID. Make sure it is shared as 'Anyone with the link can view'.";
             contentArea.Add(urlField);
-            
-            var pathField = new PropertyField(property.FindPropertyRelative("outputPath"), "Output Path");
-            pathField.tooltip = "Where to save the markdown file relative to the project root (e.g. Assets/Documentation/Doc.md)";
-            contentArea.Add(pathField);
-            
+
             item.Add(contentArea);
 
             // Status Bar
@@ -332,14 +324,13 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             _serializedSettings.Update();
             var sourcesProp = _serializedSettings.FindProperty("sources");
             sourcesProp.InsertArrayElementAtIndex(sourcesProp.arraySize);
-            
+
             var newSource = sourcesProp.GetArrayElementAtIndex(sourcesProp.arraySize - 1);
             newSource.FindPropertyRelative("name").stringValue = "New Document";
-            newSource.FindPropertyRelative("outputPath").stringValue = "Assets/Documentation/Design.md";
             newSource.FindPropertyRelative("googleDocUrlOrId").stringValue = "";
             newSource.FindPropertyRelative("lastPulledUtcIso").stringValue = "";
             newSource.FindPropertyRelative("lastError").stringValue = "";
-            
+
             _serializedSettings.ApplyModifiedProperties();
             RefreshSources();
         }
