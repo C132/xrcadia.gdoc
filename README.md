@@ -9,7 +9,7 @@ An editor-only Unity package that pulls public Google Docs as Markdown and write
 - Optionally auto-pulls on editor startup with a configurable minimum interval.
 
 ## Quick Start
-1. Open the settings window: `Tools/Google Doc Markdown/Settings`.
+1. Open the settings window: `xrcadia/Google Doc Markdown/Settings`.
 2. Click **+ Add New Source**.
 3. Enter the **Google Doc URL** or raw document ID.
 4. Set the **Output Path** (e.g., `Assets/Documentation/MyDoc.md`).

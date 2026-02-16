@@ -4,4 +4,4 @@ Use this package to pull Markdown from a public Google Doc into your Unity proje
 
 - Create a source asset via `Assets/Create/Google Doc Markdown/Source`.
 - Set `googleDocUrlOrId` and `outputPath` (relative to project root).
-- Click `Pull Now` or use `Tools/Google Doc Markdown/Pull All Sources`.
+- Click `Pull Now` or use `xrcadia/Google Doc Markdown/Pull All Sources`.
