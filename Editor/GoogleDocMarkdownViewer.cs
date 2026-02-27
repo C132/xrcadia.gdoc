@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -570,7 +571,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.style.borderLeftColor = RuleBorder;
             container.style.borderRightColor = RuleBorder;
 
-            var label = new Label(code);
+            var label = new Label(WebUtility.HtmlDecode(code));
             var monoStyle = GUI.skin.FindStyle("monospacedLabel") ?? GUI.skin.FindStyle("TextArea");
             if (monoStyle != null && monoStyle.font != null)
                 label.style.unityFont = monoStyle.font;
@@ -650,7 +651,11 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             if (string.IsNullOrEmpty(text)) return "";
 
-            text = text.Replace("<", "&lt;").Replace(">", "&gt;");
+            // Decode HTML entities from source (e.g., Google Docs exports &lt; &gt; &amp;)
+            text = WebUtility.HtmlDecode(text);
+
+            // Shelter angle brackets from Unity rich text parsing using placeholders
+            text = text.Replace("<", "\x01").Replace(">", "\x02");
 
             // Bold **text** or __text__
             text = Regex.Replace(text, @"(\*\*|__)(.*?)\1", "<b>$2</b>");
@@ -660,6 +665,9 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             // Inline code `text`
             text = Regex.Replace(text, @"`(.*?)`", $"<color={InlineCodeColor}>$1</color>");
+
+            // Restore angle brackets wrapped in noparse to display literally
+            text = text.Replace("\x01", "<noparse><</noparse>").Replace("\x02", "<noparse>></noparse>");
 
             return text;
         }

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-02-27
+
+### Fixed
+- **HTML entities displayed literally in the Markdown Viewer.** Angle brackets and other HTML entities (e.g., `&lt;`, `&gt;`, `&amp;`) from Google Docs exports were shown as raw entity text instead of being decoded. The viewer now decodes HTML entities before rendering and uses `<noparse>` tags to safely display angle brackets without interfering with Unity rich text parsing.
+
 ## [1.3.0] - 2026-02-27
 
 ### Added
