@@ -11,9 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Toggleable sidebar with document outline and file browser.** A toggle button in the toolbar opens a resizable left sidebar. The Files section shows Pinned, Recent, and All Files sub-sections. All Files renders a proper nested folder tree (Assets, Packages, etc.) matching Unity's one-column Project layout. Right-click any file to pin or unpin it. The Outline section lists all headings from the current document as a clickable tree that scrolls to the heading. Sidebar width, open state, pinned files, and recently viewed files (up to 15) persist via EditorPrefs.
 - **Resizable sidebar with drag handle.** A drag handle between the sidebar and content pane allows resizing from 140px to 500px. The handle shows an OS-level horizontal resize cursor, highlights subtly on hover, and persists the chosen width across sessions.
 - **Subtle hover highlighting across the sidebar.** File rows, folder tree entries, and outline headings show a rounded background highlight on hover for clear interactive feedback.
+- **Settings gear with dot-path toggle.** A gear icon (⚙) in the toolbar opens a settings menu. The first option toggles "Expand package dots to folders," which controls whether `com.unity.burst` is expanded into a `unity/burst` folder hierarchy or kept as a single entry. The preference persists via EditorPrefs.
 
 ### Changed
 - **Switching files no longer rebuilds the sidebar.** Opening a file from the browser or outline only re-renders the content pane and outline. The file browser tree preserves its foldout state and scroll position, so navigating between files feels seamless.
+- **Performance optimization pass.** All 13 regex patterns are now compiled once as `static readonly` fields instead of being allocated per render. The markdown file list and folder tree are cached and only rebuilt on explicit refresh. Code block accumulation uses `StringBuilder` instead of string concatenation. Character-level guards skip regex matching for lines that cannot match. Folder icons are cached as static `Texture2D` references.
 
 ## [1.4.0] - 2026-02-27
 

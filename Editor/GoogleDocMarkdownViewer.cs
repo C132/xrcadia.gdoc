@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -11,17 +12,37 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 {
     public class GoogleDocMarkdownViewer : EditorWindow
     {
+        // --- Pref keys ---
         private const string ThemePrefKey = "GoogleDocMarkdownViewer_Theme";
         private const string LegacyPaperwhitePrefKey = "GoogleDocMarkdownViewer_Paperwhite";
         private const string SidebarPrefKey = "GoogleDocMarkdownViewer_Sidebar";
         private const string PinnedFilesPrefKey = "GoogleDocMarkdownViewer_PinnedFiles";
         private const string RecentFilesPrefKey = "GoogleDocMarkdownViewer_RecentFiles";
         private const string SidebarWidthPrefKey = "GoogleDocMarkdownViewer_SidebarWidth";
+        private const string ExpandDotPathsPrefKey = "GoogleDocMarkdownViewer_ExpandDotPaths";
+
+        // --- Constants ---
         private const int MaxRecentFiles = 15;
         private const float DefaultSidebarWidth = 220;
         private const float MinSidebarWidth = 140;
         private const float MaxSidebarWidth = 500;
 
+        // --- Compiled regex (allocated once) ---
+        private static readonly Regex RxBold = new Regex(@"(\*\*|__)(.*?)\1", RegexOptions.Compiled);
+        private static readonly Regex RxItalic = new Regex(@"(\*|_)(.*?)\1", RegexOptions.Compiled);
+        private static readonly Regex RxInlineCode = new Regex(@"`(.*?)`", RegexOptions.Compiled);
+        private static readonly Regex RxStripTags = new Regex(@"<.*?>", RegexOptions.Compiled);
+        private static readonly Regex RxOrderedList = new Regex(@"^\d+\. ", RegexOptions.Compiled);
+        private static readonly Regex RxOrderedListNum = new Regex(@"^(\d+\.)", RegexOptions.Compiled);
+        private static readonly Regex RxListPrefix = new Regex(@"^([-*]|\d+\.)\s+", RegexOptions.Compiled);
+        private static readonly Regex RxTableSep = new Regex(@"^\|[\s\-:|]+\|$", RegexOptions.Compiled);
+        private static readonly Regex RxRefDef = new Regex(@"^\[.*\]:", RegexOptions.Compiled);
+        private static readonly Regex RxRefParse = new Regex(@"^\s*\[([^\]]+)\]:\s*<?([^>\s]+)>?(?:\s+[""(].*?["")])?\s*$", RegexOptions.Compiled | RegexOptions.Multiline);
+        private static readonly Regex RxLinkedImage = new Regex(@"^\[\s*(!\[.*?\]\s*(?:\[.*?\]|\(.*?\)))\s*\]\(.*?\)$", RegexOptions.Compiled);
+        private static readonly Regex RxRefImage = new Regex(@"^!\[(?<alt>.*?)\]\s*\[(?<ref>.*?)\]$", RegexOptions.Compiled);
+        private static readonly Regex RxInlineImage = new Regex(@"^!\[(?<alt>.*?)\]\s*\((?<path>.*?)\)$", RegexOptions.Compiled);
+
+        // --- State ---
         private string _filePath;
         private string _content;
         private Dictionary<string, string> _references = new Dictionary<string, string>();
@@ -29,6 +50,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
         private bool _sidebarOpen;
         private float _sidebarWidth;
+        private bool _expandDotPaths;
         private ScrollView _contentScroll;
         private VisualElement _sidebarElement;
         private VisualElement _page;
@@ -39,9 +61,17 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private List<string> _pinnedFiles = new List<string>();
         private List<string> _recentFiles = new List<string>();
 
+        // --- Cached file data (rebuilt on full BuildUI, not per-file-switch) ---
+        private List<string> _cachedMdFiles;
+        private FolderNode _cachedFileTree;
+        private FolderNode _cachedFileTreeFlat;
+
+        // --- Static caches ---
         private static readonly string[] MonoFontNames = { "Menlo", "Consolas", "Courier New", "Courier" };
         private static Font _monoFont;
         private static StyleCursor? _resizeCursor;
+        private static Texture2D _folderIcon;
+        private static Texture2D _folderOpenIcon;
 
         private static Font MonoFont
         {
@@ -84,6 +114,19 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return new StyleCursor(cursor);
         }
 
+        private static Texture2D GetFolderIcon(bool open)
+        {
+            if (open)
+            {
+                if (_folderOpenIcon == null)
+                    _folderOpenIcon = EditorGUIUtility.IconContent("FolderOpened Icon")?.image as Texture2D;
+                return _folderOpenIcon;
+            }
+            if (_folderIcon == null)
+                _folderIcon = EditorGUIUtility.IconContent("Folder Icon")?.image as Texture2D;
+            return _folderIcon;
+        }
+
         private Color HoverBackground => _theme.IsLight
             ? new Color(0f, 0f, 0f, 0.06f)
             : new Color(1f, 1f, 1f, 0.06f);
@@ -97,7 +140,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             public readonly List<string> Files = new List<string>();
         }
 
-        private static FolderNode BuildFileTree(List<string> paths)
+        private static FolderNode BuildFileTree(List<string> paths, bool expandDots)
         {
             var root = new FolderNode();
             foreach (var path in paths)
@@ -105,16 +148,12 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 var segments = new List<string>();
                 var rawParts = path.Replace("\\", "/").Split('/');
 
-                // Everything except the last part (filename) becomes folder segments.
                 for (int i = 0; i < rawParts.Length - 1; i++)
                 {
                     var part = rawParts[i];
 
                     // Only expand dots for reverse-DNS package names (com.* segments).
-                    // Strip "com." then split remaining dots into folder levels.
-                    // Other dotted segments (e.g. Unity.Collections.PerformanceTests)
-                    // are kept as-is since they are real directory names, not packages.
-                    if (part.StartsWith("com.", StringComparison.OrdinalIgnoreCase))
+                    if (expandDots && part.StartsWith("com.", StringComparison.OrdinalIgnoreCase))
                     {
                         var stripped = part.Substring(4);
                         segments.AddRange(stripped.Split('.'));
@@ -158,6 +197,43 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             }
         }
 
+        private void InvalidateFileCache()
+        {
+            _cachedMdFiles = null;
+            _cachedFileTree = null;
+            _cachedFileTreeFlat = null;
+        }
+
+        private List<string> GetMarkdownFiles()
+        {
+            if (_cachedMdFiles == null)
+            {
+                _cachedMdFiles = new List<string>();
+                var guids = AssetDatabase.FindAssets("t:TextAsset");
+                foreach (var guid in guids)
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(guid);
+                    if (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                        _cachedMdFiles.Add(path);
+                }
+                _cachedMdFiles.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+            return _cachedMdFiles;
+        }
+
+        private FolderNode GetFileTree()
+        {
+            if (_expandDotPaths)
+            {
+                if (_cachedFileTree == null)
+                    _cachedFileTree = BuildFileTree(GetMarkdownFiles(), true);
+                return _cachedFileTree;
+            }
+            if (_cachedFileTreeFlat == null)
+                _cachedFileTreeFlat = BuildFileTree(GetMarkdownFiles(), false);
+            return _cachedFileTreeFlat;
+        }
+
         // --- Window entry points ---
 
         public static void ShowWindow(string relativePath)
@@ -198,6 +274,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             if (string.IsNullOrEmpty(_filePath)) return;
             LoadFileContent();
+            InvalidateFileCache();
 
             if (rootVisualElement != null)
             {
@@ -210,6 +287,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             _theme = LoadTheme();
             _sidebarOpen = EditorPrefs.GetBool(SidebarPrefKey, false);
             _sidebarWidth = EditorPrefs.GetFloat(SidebarWidthPrefKey, DefaultSidebarWidth);
+            _expandDotPaths = EditorPrefs.GetBool(ExpandDotPathsPrefKey, true);
             _pinnedFiles = LoadFileList(PinnedFilesPrefKey);
             _recentFiles = LoadFileList(RecentFilesPrefKey);
             BuildUI();
@@ -261,6 +339,21 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 menu.AddItem(new GUIContent("  " + theme.Name), isActive, () => SetTheme(captured));
             }
 
+            menu.ShowAsContext();
+        }
+
+        // --- Settings ---
+
+        private void ShowSettingsMenu()
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Expand package dots to folders"), _expandDotPaths, () =>
+            {
+                _expandDotPaths = !_expandDotPaths;
+                EditorPrefs.SetBool(ExpandDotPathsPrefKey, _expandDotPaths);
+                InvalidateFileCache();
+                BuildUI();
+            });
             menu.ShowAsContext();
         }
 
@@ -365,6 +458,19 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             themeBtn.style.marginRight = 4;
             toolbar.Add(themeBtn);
 
+            // Settings gear
+            var gearBtn = new Label("\u2699");
+            gearBtn.style.width = 22;
+            gearBtn.style.height = 20;
+            gearBtn.style.marginRight = 4;
+            gearBtn.style.fontSize = 15;
+            gearBtn.style.unityTextAlign = TextAnchor.MiddleCenter;
+            gearBtn.style.color = _theme.TextMuted;
+            gearBtn.RegisterCallback<ClickEvent>(_ => ShowSettingsMenu());
+            gearBtn.RegisterCallback<MouseEnterEvent>(_ => gearBtn.style.color = _theme.Heading);
+            gearBtn.RegisterCallback<MouseLeaveEvent>(_ => gearBtn.style.color = _theme.TextMuted);
+            toolbar.Add(gearBtn);
+
             var reloadBtn = new Button(Refresh) { text = "Reload" };
             reloadBtn.style.height = 20;
             toolbar.Add(reloadBtn);
@@ -397,7 +503,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 _sidebarElement = BuildSidebar();
                 body.Add(_sidebarElement);
 
-                // Drag handle: wide hit area, thin visual line, OS resize cursor
+                // Drag handle
                 var handle = new VisualElement();
                 handle.style.width = 12;
                 handle.style.justifyContent = Justify.Center;
@@ -414,7 +520,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 float dragStartX = 0;
                 float dragStartWidth = 0;
 
-                // Subtle hover: just slightly brighter line
                 var handleHoverColor = _theme.IsLight
                     ? new Color(0f, 0f, 0f, 0.25f)
                     : new Color(1f, 1f, 1f, 0.20f);
@@ -461,7 +566,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             body.Add(_contentScroll);
 
-            // Render content (populates _headings, then outline uses them)
             RebuildContent();
         }
 
@@ -485,14 +589,16 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 var lines = _content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
                 bool inCodeBlock = false;
-                string codeBlockContent = "";
+                var codeBuilder = new StringBuilder();
                 List<string> tableLines = new List<string>();
 
                 foreach (var line in lines)
                 {
-                    var trimmedLine = line.Trim();
+                    var trimmedLine = line.TrimStart();
+                    // Quick length guard before StartsWith on trimmed
+                    int trimLen = trimmedLine.Length;
 
-                    if (trimmedLine.StartsWith("```"))
+                    if (trimLen >= 3 && trimmedLine[0] == '`' && trimmedLine[1] == '`' && trimmedLine[2] == '`')
                     {
                         if (tableLines.Count > 0)
                         {
@@ -502,8 +608,8 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
                         if (inCodeBlock)
                         {
-                            _page.Add(CreateCodeBlock(codeBlockContent.TrimEnd()));
-                            codeBlockContent = "";
+                            _page.Add(CreateCodeBlock(codeBuilder.ToString().TrimEnd()));
+                            codeBuilder.Clear();
                             inCodeBlock = false;
                         }
                         else
@@ -515,11 +621,11 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
                     if (inCodeBlock)
                     {
-                        codeBlockContent += line + "\n";
+                        codeBuilder.AppendLine(line);
                         continue;
                     }
 
-                    if (trimmedLine.StartsWith("|") && trimmedLine.EndsWith("|") && trimmedLine.Contains("|"))
+                    if (trimLen > 0 && trimmedLine[0] == '|' && trimmedLine[trimLen - 1] == '|')
                     {
                         tableLines.Add(trimmedLine);
                         continue;
@@ -530,7 +636,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                         tableLines.Clear();
                     }
 
-                    if (trimmedLine.StartsWith("#"))
+                    if (trimLen > 0 && trimmedLine[0] == '#')
                     {
                         _page.Add(CreateHeader(trimmedLine));
                         continue;
@@ -548,19 +654,20 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                         continue;
                     }
 
-                    if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("* ") || Regex.IsMatch(trimmedLine, @"^\d+\. "))
+                    if (trimLen >= 2 && ((trimmedLine[0] == '-' || trimmedLine[0] == '*') && trimmedLine[1] == ' ')
+                        || RxOrderedList.IsMatch(trimmedLine))
                     {
                         _page.Add(CreateListItem(line));
                         continue;
                     }
 
-                    if (trimmedLine.StartsWith("> "))
+                    if (trimLen >= 2 && trimmedLine[0] == '>' && trimmedLine[1] == ' ')
                     {
                         _page.Add(CreateBlockquote(line));
                         continue;
                     }
 
-                    if (Regex.IsMatch(trimmedLine, @"^\[.*\]:"))
+                    if (RxRefDef.IsMatch(trimmedLine))
                     {
                         continue;
                     }
@@ -703,9 +810,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             var allFoldout = new Foldout { text = "All Files", value = false };
             StyleSubFoldout(allFoldout);
 
-            var mdFiles = FindAllMarkdownFiles();
-            var tree = BuildFileTree(mdFiles);
-            RenderFolderTree(allFoldout, tree);
+            RenderFolderTree(allFoldout, GetFileTree());
 
             filesFoldout.Add(allFoldout);
             sidebar.Add(filesFoldout);
@@ -772,9 +877,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 toggle.style.borderBottomRightRadius = 3;
                 AddHoverHighlight(toggle);
 
-                // Insert folder icon between the arrow and the label.
-                // Toggle input structure: [checkmark (arrow), label].
-                // We insert the icon at index 1 so it sits between them.
                 var icon = new Image();
                 icon.image = GetFolderIcon(foldout.value);
                 icon.style.width = 14;
@@ -786,11 +888,11 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 if (input != null)
                     input.Insert(1, icon);
 
-                // Swap icon when foldout opens/closes
                 var capturedIcon = icon;
-                foldout.RegisterValueChangedCallback(e =>
+                var capturedFoldout = foldout;
+                foldout.RegisterValueChangedCallback(_ =>
                 {
-                    capturedIcon.image = GetFolderIcon(e.newValue);
+                    capturedIcon.image = GetFolderIcon(capturedFoldout.value);
                 });
 
                 var label = toggle.Q<Label>();
@@ -800,12 +902,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     label.style.fontSize = 12;
                 }
             }
-        }
-
-        private static Texture2D GetFolderIcon(bool open)
-        {
-            var content = EditorGUIUtility.IconContent(open ? "FolderOpened Icon" : "Folder Icon");
-            return content?.image as Texture2D;
         }
 
         private VisualElement CreateFileRow(string path, bool showUnpin)
@@ -881,20 +977,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return File.Exists(full);
         }
 
-        private static List<string> FindAllMarkdownFiles()
-        {
-            var result = new List<string>();
-            var guids = AssetDatabase.FindAssets("t:TextAsset");
-            foreach (var guid in guids)
-            {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                if (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                    result.Add(path);
-            }
-            result.Sort(StringComparer.OrdinalIgnoreCase);
-            return result;
-        }
-
         // --- Content elements ---
 
         private VisualElement CreateTable(List<string> rows)
@@ -918,7 +1000,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             if (rows.Count == 0) return table;
 
-            bool hasHeader = rows.Count > 1 && Regex.IsMatch(rows[1], @"^\|[\s\-:|]+\|$");
+            bool hasHeader = rows.Count > 1 && RxTableSep.IsMatch(rows[1]);
 
             int startIdx = 0;
             if (hasHeader)
@@ -991,15 +1073,15 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             path = null;
             alt = null;
 
-            if (string.IsNullOrEmpty(line)) return false;
+            if (string.IsNullOrEmpty(line) || line[0] != '!' && line[0] != '[') return false;
 
-            var linkedMatch = Regex.Match(line, @"^\[\s*(!\[.*?\]\s*(?:\[.*?\]|\(.*?\)))\s*\]\(.*?\)$");
+            var linkedMatch = RxLinkedImage.Match(line);
             if (linkedMatch.Success)
             {
                 line = linkedMatch.Groups[1].Value.Trim();
             }
 
-            var refMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\[(?<ref>.*?)\]$");
+            var refMatch = RxRefImage.Match(line);
             if (refMatch.Success)
             {
                 alt = refMatch.Groups["alt"].Value;
@@ -1012,7 +1094,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 }
             }
 
-            var inlineMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\((?<path>.*?)\)$");
+            var inlineMatch = RxInlineImage.Match(line);
             if (inlineMatch.Success)
             {
                 alt = inlineMatch.Groups["alt"].Value;
@@ -1026,7 +1108,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private void ParseReferences()
         {
             _references.Clear();
-            var matches = Regex.Matches(_content, @"^\s*\[([^\]]+)\]:\s*<?([^>\s]+)>?(?:\s+[""(].*?["")])?\s*$", RegexOptions.Multiline);
+            var matches = RxRefParse.Matches(_content);
             foreach (Match m in matches)
             {
                 _references[m.Groups[1].Value] = m.Groups[2].Value.Trim();
@@ -1080,7 +1162,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             wrapper.Add(label);
 
-            var plainText = Regex.Replace(text, @"<.*?>", "");
+            var plainText = RxStripTags.Replace(text, "");
             _headings.Add((level, plainText, wrapper));
 
             return wrapper;
@@ -1104,10 +1186,11 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.style.marginLeft = 20;
             container.style.marginBottom = 3;
 
+            var trimmed = line.TrimStart();
             var bullet = new Label("\u2022");
-            if (Regex.IsMatch(line.TrimStart(), @"^\d+\. "))
+            if (RxOrderedList.IsMatch(trimmed))
             {
-                var match = Regex.Match(line.TrimStart(), @"^(\d+\.)");
+                var match = RxOrderedListNum.Match(trimmed);
                 bullet.text = match.Groups[1].Value;
                 bullet.style.marginRight = 6;
             }
@@ -1120,7 +1203,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             bullet.style.color = _theme.TextBody;
             container.Add(bullet);
 
-            string text = Regex.Replace(line.TrimStart(), @"^([-*]|\d+\.)\s+", "");
+            string text = RxListPrefix.Replace(trimmed, "");
             var label = new Label(ProcessRichText(text));
             label.enableRichText = true;
             label.style.whiteSpace = WhiteSpace.Normal;
@@ -1261,9 +1344,9 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             text = WebUtility.HtmlDecode(text);
             text = text.Replace("<", "\x01").Replace(">", "\x02");
 
-            text = Regex.Replace(text, @"(\*\*|__)(.*?)\1", "<b>$2</b>");
-            text = Regex.Replace(text, @"(\*|_)(.*?)\1", "<i>$2</i>");
-            text = Regex.Replace(text, @"`(.*?)`", $"<color={_theme.InlineCodeColor}>$1</color>");
+            text = RxBold.Replace(text, "<b>$2</b>");
+            text = RxItalic.Replace(text, "<i>$2</i>");
+            text = RxInlineCode.Replace(text, $"<color={_theme.InlineCodeColor}>$1</color>");
 
             text = text.Replace("\x01", "<noparse><</noparse>").Replace("\x02", "<noparse>></noparse>");
 
