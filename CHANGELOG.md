@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-02-27
+
+### Added
+- **Toggleable sidebar with document outline and file browser.** A toggle button in the toolbar opens a resizable left sidebar. The Files section shows Pinned, Recent, and All Files sub-sections. All Files renders a proper nested folder tree (Assets, Packages, etc.) matching Unity's one-column Project layout. Right-click any file to pin or unpin it. The Outline section lists all headings from the current document as a clickable tree that scrolls to the heading. Sidebar width, open state, pinned files, and recently viewed files (up to 15) persist via EditorPrefs.
+- **Resizable sidebar with drag handle.** A drag handle between the sidebar and content pane allows resizing from 140px to 500px. The handle shows an OS-level horizontal resize cursor, highlights subtly on hover, and persists the chosen width across sessions.
+- **Subtle hover highlighting across the sidebar.** File rows, folder tree entries, and outline headings show a rounded background highlight on hover for clear interactive feedback.
+
+### Changed
+- **Switching files no longer rebuilds the sidebar.** Opening a file from the browser or outline only re-renders the content pane and outline. The file browser tree preserves its foldout state and scroll position, so navigating between files feels seamless.
+
 ## [1.4.0] - 2026-02-27
 
 ### Added

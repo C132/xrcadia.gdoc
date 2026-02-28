@@ -13,14 +13,35 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
     {
         private const string ThemePrefKey = "GoogleDocMarkdownViewer_Theme";
         private const string LegacyPaperwhitePrefKey = "GoogleDocMarkdownViewer_Paperwhite";
+        private const string SidebarPrefKey = "GoogleDocMarkdownViewer_Sidebar";
+        private const string PinnedFilesPrefKey = "GoogleDocMarkdownViewer_PinnedFiles";
+        private const string RecentFilesPrefKey = "GoogleDocMarkdownViewer_RecentFiles";
+        private const string SidebarWidthPrefKey = "GoogleDocMarkdownViewer_SidebarWidth";
+        private const int MaxRecentFiles = 15;
+        private const float DefaultSidebarWidth = 220;
+        private const float MinSidebarWidth = 140;
+        private const float MaxSidebarWidth = 500;
 
         private string _filePath;
         private string _content;
         private Dictionary<string, string> _references = new Dictionary<string, string>();
         private MarkdownTheme _theme;
 
+        private bool _sidebarOpen;
+        private float _sidebarWidth;
+        private ScrollView _contentScroll;
+        private VisualElement _sidebarElement;
+        private VisualElement _page;
+        private VisualElement _outlineContainer;
+        private Label _pathLabel;
+        private List<(int level, string text, VisualElement element)> _headings = new List<(int, string, VisualElement)>();
+        private List<(string path, Label label)> _fileLabels = new List<(string, Label)>();
+        private List<string> _pinnedFiles = new List<string>();
+        private List<string> _recentFiles = new List<string>();
+
         private static readonly string[] MonoFontNames = { "Menlo", "Consolas", "Courier New", "Courier" };
         private static Font _monoFont;
+        private static StyleCursor? _resizeCursor;
 
         private static Font MonoFont
         {
@@ -38,16 +59,127 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             }
         }
 
+        private static StyleCursor ResizeHorizontalCursor
+        {
+            get
+            {
+                if (_resizeCursor == null)
+                    _resizeCursor = CreateSystemCursor(MouseCursor.ResizeHorizontal);
+                return _resizeCursor.Value;
+            }
+        }
+
+        private static StyleCursor CreateSystemCursor(MouseCursor cursorType)
+        {
+            var cursor = new UnityEngine.UIElements.Cursor();
+            var field = typeof(UnityEngine.UIElements.Cursor).GetField(
+                "m_DefaultCursorId",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (field != null)
+            {
+                object boxed = cursor;
+                field.SetValue(boxed, (int)cursorType);
+                cursor = (UnityEngine.UIElements.Cursor)boxed;
+            }
+            return new StyleCursor(cursor);
+        }
+
+        private Color HoverBackground => _theme.IsLight
+            ? new Color(0f, 0f, 0f, 0.06f)
+            : new Color(1f, 1f, 1f, 0.06f);
+
+        // --- Folder tree ---
+
+        private class FolderNode
+        {
+            public readonly SortedDictionary<string, FolderNode> Folders =
+                new SortedDictionary<string, FolderNode>(StringComparer.OrdinalIgnoreCase);
+            public readonly List<string> Files = new List<string>();
+        }
+
+        private static FolderNode BuildFileTree(List<string> paths)
+        {
+            var root = new FolderNode();
+            foreach (var path in paths)
+            {
+                var segments = new List<string>();
+                var rawParts = path.Replace("\\", "/").Split('/');
+
+                // Everything except the last part (filename) becomes folder segments.
+                for (int i = 0; i < rawParts.Length - 1; i++)
+                {
+                    var part = rawParts[i];
+
+                    // Only expand dots for reverse-DNS package names (com.* segments).
+                    // Strip "com." then split remaining dots into folder levels.
+                    // Other dotted segments (e.g. Unity.Collections.PerformanceTests)
+                    // are kept as-is since they are real directory names, not packages.
+                    if (part.StartsWith("com.", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var stripped = part.Substring(4);
+                        segments.AddRange(stripped.Split('.'));
+                    }
+                    else
+                    {
+                        segments.Add(part);
+                    }
+                }
+
+                var current = root;
+                foreach (var seg in segments)
+                {
+                    if (!current.Folders.TryGetValue(seg, out var child))
+                    {
+                        child = new FolderNode();
+                        current.Folders[seg] = child;
+                    }
+                    current = child;
+                }
+                current.Files.Add(path);
+            }
+            return root;
+        }
+
+        private void RenderFolderTree(VisualElement parent, FolderNode node)
+        {
+            foreach (var kvp in node.Folders)
+            {
+                var foldout = new Foldout { text = kvp.Key, value = false };
+                StyleTreeFoldout(foldout);
+                RenderFolderTree(foldout, kvp.Value);
+                parent.Add(foldout);
+            }
+
+            foreach (var filePath in node.Files)
+            {
+                var row = CreateFileRow(filePath, false);
+                row.style.marginLeft = 18;
+                parent.Add(row);
+            }
+        }
+
+        // --- Window entry points ---
+
         public static void ShowWindow(string relativePath)
         {
             var window = GetWindow<GoogleDocMarkdownViewer>("Markdown Viewer");
             window._filePath = relativePath;
             window.titleContent = new GUIContent("MD: " + Path.GetFileName(relativePath), EditorGUIUtility.IconContent("TextAsset Icon").image);
             window.minSize = new Vector2(400, 500);
+            window.AddRecentFile(relativePath);
             window.Refresh();
         }
 
-        private void Refresh()
+        private void OpenFile(string relativePath)
+        {
+            _filePath = relativePath;
+            titleContent = new GUIContent("MD: " + Path.GetFileName(relativePath), EditorGUIUtility.IconContent("TextAsset Icon").image);
+            AddRecentFile(relativePath);
+            LoadFileContent();
+            RebuildContent();
+        }
+
+        private void LoadFileContent()
         {
             if (string.IsNullOrEmpty(_filePath)) return;
 
@@ -60,6 +192,12 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             {
                 _content = File.ReadAllText(fullPath);
             }
+        }
+
+        private void Refresh()
+        {
+            if (string.IsNullOrEmpty(_filePath)) return;
+            LoadFileContent();
 
             if (rootVisualElement != null)
             {
@@ -70,8 +208,14 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         public void CreateGUI()
         {
             _theme = LoadTheme();
+            _sidebarOpen = EditorPrefs.GetBool(SidebarPrefKey, false);
+            _sidebarWidth = EditorPrefs.GetFloat(SidebarWidthPrefKey, DefaultSidebarWidth);
+            _pinnedFiles = LoadFileList(PinnedFilesPrefKey);
+            _recentFiles = LoadFileList(RecentFilesPrefKey);
             BuildUI();
         }
+
+        // --- Theme ---
 
         private MarkdownTheme LoadTheme()
         {
@@ -79,7 +223,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             if (!string.IsNullOrEmpty(saved))
                 return MarkdownTheme.FindByName(saved);
 
-            // Migrate from legacy paperwhite toggle
             if (EditorPrefs.GetBool(LegacyPaperwhitePrefKey, false))
                 return MarkdownTheme.FindByName("Paperwhite");
 
@@ -121,10 +264,64 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             menu.ShowAsContext();
         }
 
+        // --- File list persistence ---
+
+        private static List<string> LoadFileList(string prefKey)
+        {
+            var raw = EditorPrefs.GetString(prefKey, "");
+            if (string.IsNullOrEmpty(raw)) return new List<string>();
+            return new List<string>(raw.Split('\n'));
+        }
+
+        private static void SaveFileList(string prefKey, List<string> list)
+        {
+            EditorPrefs.SetString(prefKey, string.Join("\n", list));
+        }
+
+        private void AddRecentFile(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            _recentFiles.Remove(path);
+            _recentFiles.Insert(0, path);
+            if (_recentFiles.Count > MaxRecentFiles)
+                _recentFiles.RemoveRange(MaxRecentFiles, _recentFiles.Count - MaxRecentFiles);
+            SaveFileList(RecentFilesPrefKey, _recentFiles);
+        }
+
+        private void TogglePin(string path)
+        {
+            if (_pinnedFiles.Contains(path))
+                _pinnedFiles.Remove(path);
+            else
+                _pinnedFiles.Insert(0, path);
+            SaveFileList(PinnedFilesPrefKey, _pinnedFiles);
+            BuildUI();
+        }
+
+        private void ShowFileContextMenu(string path)
+        {
+            var menu = new GenericMenu();
+            bool isPinned = _pinnedFiles.Contains(path);
+            menu.AddItem(new GUIContent(isPinned ? "Unpin" : "Pin"), false, () => TogglePin(path));
+            menu.ShowAsContext();
+        }
+
+        // --- Hover helper ---
+
+        private void AddHoverHighlight(VisualElement element)
+        {
+            var bg = HoverBackground;
+            element.RegisterCallback<MouseEnterEvent>(_ => element.style.backgroundColor = bg);
+            element.RegisterCallback<MouseLeaveEvent>(_ => element.style.backgroundColor = StyleKeyword.Null);
+        }
+
+        // --- Full UI build (theme change, sidebar toggle, pin/unpin) ---
+
         private void BuildUI()
         {
             rootVisualElement.Clear();
             rootVisualElement.style.backgroundColor = _theme.Background;
+            _fileLabels.Clear();
 
             // Toolbar
             var toolbar = new VisualElement();
@@ -138,13 +335,29 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             toolbar.style.borderBottomWidth = 1;
             toolbar.style.borderBottomColor = _theme.ToolbarBorder;
 
-            var pathLabel = new Label(_filePath);
-            pathLabel.style.flexGrow = 1;
-            pathLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
-            pathLabel.style.fontSize = 11;
-            pathLabel.style.color = _theme.TextMuted;
+            var sidebarBtn = new Label(_sidebarOpen ? "\u25C0" : "\u2261");
+            sidebarBtn.style.width = 22;
+            sidebarBtn.style.height = 20;
+            sidebarBtn.style.marginRight = 6;
+            sidebarBtn.style.fontSize = 13;
+            sidebarBtn.style.unityTextAlign = TextAnchor.MiddleCenter;
+            sidebarBtn.style.color = _theme.TextMuted;
+            sidebarBtn.RegisterCallback<ClickEvent>(_ =>
+            {
+                _sidebarOpen = !_sidebarOpen;
+                EditorPrefs.SetBool(SidebarPrefKey, _sidebarOpen);
+                BuildUI();
+            });
+            sidebarBtn.RegisterCallback<MouseEnterEvent>(_ => sidebarBtn.style.color = _theme.Heading);
+            sidebarBtn.RegisterCallback<MouseLeaveEvent>(_ => sidebarBtn.style.color = _theme.TextMuted);
+            toolbar.Add(sidebarBtn);
 
-            toolbar.Add(pathLabel);
+            _pathLabel = new Label(_filePath);
+            _pathLabel.style.flexGrow = 1;
+            _pathLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
+            _pathLabel.style.fontSize = 11;
+            _pathLabel.style.color = _theme.TextMuted;
+            toolbar.Add(_pathLabel);
 
             var themeBtn = new Button(() => ShowThemeMenu()) { text = _theme.Name + " \u25BE" };
             themeBtn.style.width = 140;
@@ -158,134 +371,531 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             rootVisualElement.Add(toolbar);
 
-            // Scroll area
-            var scroll = new ScrollView();
-            scroll.style.flexGrow = 1;
-            rootVisualElement.Add(scroll);
+            // Body: sidebar + handle + content
+            var body = new VisualElement();
+            body.style.flexDirection = FlexDirection.Row;
+            body.style.flexGrow = 1;
+            rootVisualElement.Add(body);
 
-            // Book-like centered content column
-            var page = new VisualElement();
-            page.style.maxWidth = 680;
-            page.style.alignSelf = Align.Center;
-            page.style.width = new StyleLength(new Length(100, LengthUnit.Percent));
-            page.style.paddingLeft = 48;
-            page.style.paddingRight = 48;
-            page.style.paddingTop = 36;
-            page.style.paddingBottom = 60;
-            scroll.Add(page);
+            // Content scroll
+            _contentScroll = new ScrollView();
+            _contentScroll.style.flexGrow = 1;
 
-            if (string.IsNullOrEmpty(_content)) return;
+            _page = new VisualElement();
+            _page.style.maxWidth = 680;
+            _page.style.alignSelf = Align.Center;
+            _page.style.width = new StyleLength(new Length(100, LengthUnit.Percent));
+            _page.style.paddingLeft = 48;
+            _page.style.paddingRight = 48;
+            _page.style.paddingTop = 36;
+            _page.style.paddingBottom = 60;
+            _contentScroll.Add(_page);
 
-            ParseReferences();
-
-            var lines = _content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-            bool inCodeBlock = false;
-            string codeBlockContent = "";
-            List<string> tableLines = new List<string>();
-
-            foreach (var line in lines)
+            // Sidebar
+            if (_sidebarOpen)
             {
-                var trimmedLine = line.Trim();
+                _sidebarElement = BuildSidebar();
+                body.Add(_sidebarElement);
 
-                // Code blocks
-                if (trimmedLine.StartsWith("```"))
+                // Drag handle: wide hit area, thin visual line, OS resize cursor
+                var handle = new VisualElement();
+                handle.style.width = 12;
+                handle.style.justifyContent = Justify.Center;
+                handle.style.alignItems = Align.Center;
+                handle.style.cursor = ResizeHorizontalCursor;
+
+                var handleLine = new VisualElement();
+                handleLine.style.width = 1;
+                handleLine.style.height = new StyleLength(new Length(100, LengthUnit.Percent));
+                handleLine.style.backgroundColor = _theme.RuleBorder;
+                handle.Add(handleLine);
+
+                bool dragging = false;
+                float dragStartX = 0;
+                float dragStartWidth = 0;
+
+                // Subtle hover: just slightly brighter line
+                var handleHoverColor = _theme.IsLight
+                    ? new Color(0f, 0f, 0f, 0.25f)
+                    : new Color(1f, 1f, 1f, 0.20f);
+
+                handle.RegisterCallback<MouseEnterEvent>(_ => handleLine.style.backgroundColor = handleHoverColor);
+                handle.RegisterCallback<MouseLeaveEvent>(_ =>
                 {
-                    if (tableLines.Count > 0)
+                    if (!dragging)
+                        handleLine.style.backgroundColor = _theme.RuleBorder;
+                });
+
+                handle.RegisterCallback<MouseDownEvent>(e =>
+                {
+                    if (e.button != 0) return;
+                    dragging = true;
+                    dragStartX = e.mousePosition.x;
+                    dragStartWidth = _sidebarWidth;
+                    handle.CaptureMouse();
+                    handleLine.style.backgroundColor = handleHoverColor;
+                    e.StopPropagation();
+                });
+                handle.RegisterCallback<MouseMoveEvent>(e =>
+                {
+                    if (!dragging) return;
+                    float delta = e.mousePosition.x - dragStartX;
+                    float newWidth = Mathf.Clamp(dragStartWidth + delta, MinSidebarWidth, MaxSidebarWidth);
+                    _sidebarWidth = newWidth;
+                    _sidebarElement.style.width = newWidth;
+                    _sidebarElement.style.minWidth = newWidth;
+                    e.StopPropagation();
+                });
+                handle.RegisterCallback<MouseUpEvent>(e =>
+                {
+                    if (!dragging) return;
+                    dragging = false;
+                    handle.ReleaseMouse();
+                    EditorPrefs.SetFloat(SidebarWidthPrefKey, _sidebarWidth);
+                    handleLine.style.backgroundColor = _theme.RuleBorder;
+                    e.StopPropagation();
+                });
+
+                body.Add(handle);
+            }
+
+            body.Add(_contentScroll);
+
+            // Render content (populates _headings, then outline uses them)
+            RebuildContent();
+        }
+
+        /// <summary>
+        /// Rebuilds only the content pane and outline. The sidebar file browser stays intact.
+        /// </summary>
+        private void RebuildContent()
+        {
+            if (_page == null || _contentScroll == null) return;
+
+            _page.Clear();
+            _headings.Clear();
+
+            if (_pathLabel != null)
+                _pathLabel.text = _filePath;
+
+            if (!string.IsNullOrEmpty(_content))
+            {
+                ParseReferences();
+
+                var lines = _content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+                bool inCodeBlock = false;
+                string codeBlockContent = "";
+                List<string> tableLines = new List<string>();
+
+                foreach (var line in lines)
+                {
+                    var trimmedLine = line.Trim();
+
+                    if (trimmedLine.StartsWith("```"))
                     {
-                        page.Add(CreateTable(tableLines));
-                        tableLines.Clear();
+                        if (tableLines.Count > 0)
+                        {
+                            _page.Add(CreateTable(tableLines));
+                            tableLines.Clear();
+                        }
+
+                        if (inCodeBlock)
+                        {
+                            _page.Add(CreateCodeBlock(codeBlockContent.TrimEnd()));
+                            codeBlockContent = "";
+                            inCodeBlock = false;
+                        }
+                        else
+                        {
+                            inCodeBlock = true;
+                        }
+                        continue;
                     }
 
                     if (inCodeBlock)
                     {
-                        page.Add(CreateCodeBlock(codeBlockContent.TrimEnd()));
-                        codeBlockContent = "";
-                        inCodeBlock = false;
+                        codeBlockContent += line + "\n";
+                        continue;
+                    }
+
+                    if (trimmedLine.StartsWith("|") && trimmedLine.EndsWith("|") && trimmedLine.Contains("|"))
+                    {
+                        tableLines.Add(trimmedLine);
+                        continue;
+                    }
+                    else if (tableLines.Count > 0)
+                    {
+                        _page.Add(CreateTable(tableLines));
+                        tableLines.Clear();
+                    }
+
+                    if (trimmedLine.StartsWith("#"))
+                    {
+                        _page.Add(CreateHeader(trimmedLine));
+                        continue;
+                    }
+
+                    if (trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___")
+                    {
+                        _page.Add(CreateHorizontalRule());
+                        continue;
+                    }
+
+                    if (TryMatchImage(trimmedLine, out var imgPath, out var altText))
+                    {
+                        _page.Add(CreateImage(imgPath, altText));
+                        continue;
+                    }
+
+                    if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("* ") || Regex.IsMatch(trimmedLine, @"^\d+\. "))
+                    {
+                        _page.Add(CreateListItem(line));
+                        continue;
+                    }
+
+                    if (trimmedLine.StartsWith("> "))
+                    {
+                        _page.Add(CreateBlockquote(line));
+                        continue;
+                    }
+
+                    if (Regex.IsMatch(trimmedLine, @"^\[.*\]:"))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        _page.Add(CreateParagraph(line));
                     }
                     else
                     {
-                        inCodeBlock = true;
+                        var spacer = new VisualElement { style = { height = 8 } };
+                        _page.Add(spacer);
                     }
-                    continue;
                 }
 
-                if (inCodeBlock)
+                if (tableLines.Count > 0)
                 {
-                    codeBlockContent += line + "\n";
-                    continue;
-                }
-
-                // Table detection (very basic)
-                if (trimmedLine.StartsWith("|") && trimmedLine.EndsWith("|") && trimmedLine.Contains("|"))
-                {
-                    tableLines.Add(trimmedLine);
-                    continue;
-                }
-                else if (tableLines.Count > 0)
-                {
-                    page.Add(CreateTable(tableLines));
-                    tableLines.Clear();
-                }
-
-                // Headers
-                if (trimmedLine.StartsWith("#"))
-                {
-                    page.Add(CreateHeader(trimmedLine));
-                    continue;
-                }
-
-                // Horizontal Rule
-                if (trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___")
-                {
-                    page.Add(CreateHorizontalRule());
-                    continue;
-                }
-
-                // Images (possibly linked)
-                if (TryMatchImage(trimmedLine, out var imgPath, out var altText))
-                {
-                    page.Add(CreateImage(imgPath, altText));
-                    continue;
-                }
-
-                // Lists
-                if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("* ") || Regex.IsMatch(trimmedLine, @"^\d+\. "))
-                {
-                    page.Add(CreateListItem(line));
-                    continue;
-                }
-
-                // Blockquotes
-                if (trimmedLine.StartsWith("> "))
-                {
-                    page.Add(CreateBlockquote(line));
-                    continue;
-                }
-
-                // Reference definitions (skip)
-                if (Regex.IsMatch(trimmedLine, @"^\[.*\]:"))
-                {
-                    continue;
-                }
-
-                // Paragraph or empty line
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    page.Add(CreateParagraph(line));
-                }
-                else
-                {
-                    var spacer = new VisualElement { style = { height = 8 } };
-                    page.Add(spacer);
+                    _page.Add(CreateTable(tableLines));
                 }
             }
 
-            if (tableLines.Count > 0)
+            RebuildOutline();
+            UpdateFileHighlights();
+        }
+
+        private void RebuildOutline()
+        {
+            if (_outlineContainer == null) return;
+
+            _outlineContainer.Clear();
+
+            if (_headings.Count == 0)
             {
-                page.Add(CreateTable(tableLines));
+                var empty = new Label("No headings");
+                empty.style.color = _theme.TextMuted;
+                empty.style.fontSize = 11;
+                empty.style.paddingLeft = 8;
+                _outlineContainer.Add(empty);
+            }
+            else
+            {
+                var hoverBg = HoverBackground;
+
+                foreach (var (level, text, element) in _headings)
+                {
+                    var row = new VisualElement();
+                    row.style.paddingLeft = 8 + (level - 1) * 14;
+                    row.style.paddingTop = 2;
+                    row.style.paddingBottom = 2;
+                    row.style.paddingRight = 4;
+                    row.style.borderTopLeftRadius = 3;
+                    row.style.borderTopRightRadius = 3;
+                    row.style.borderBottomLeftRadius = 3;
+                    row.style.borderBottomRightRadius = 3;
+                    row.tooltip = $"H{level}: {text}";
+
+                    var entry = new Label(text);
+                    entry.style.fontSize = 12;
+                    entry.style.color = _theme.TextBody;
+
+                    if (level == 1)
+                        entry.style.unityFontStyleAndWeight = FontStyle.Bold;
+
+                    row.Add(entry);
+
+                    var captured = element;
+                    row.RegisterCallback<ClickEvent>(_ => _contentScroll.ScrollTo(captured));
+                    row.RegisterCallback<MouseEnterEvent>(_ =>
+                    {
+                        row.style.backgroundColor = hoverBg;
+                        entry.style.color = _theme.Heading;
+                    });
+                    row.RegisterCallback<MouseLeaveEvent>(_ =>
+                    {
+                        row.style.backgroundColor = StyleKeyword.Null;
+                        entry.style.color = _theme.TextBody;
+                    });
+
+                    _outlineContainer.Add(row);
+                }
             }
         }
+
+        private void UpdateFileHighlights()
+        {
+            foreach (var (path, label) in _fileLabels)
+            {
+                bool isCurrent = path == _filePath;
+                label.style.color = isCurrent ? _theme.Heading : _theme.TextBody;
+                label.style.unityFontStyleAndWeight = isCurrent ? FontStyle.Bold : FontStyle.Normal;
+            }
+        }
+
+        // --- Sidebar ---
+
+        private VisualElement BuildSidebar()
+        {
+            var sidebar = new ScrollView();
+            sidebar.style.width = _sidebarWidth;
+            sidebar.style.minWidth = _sidebarWidth;
+            sidebar.style.backgroundColor = _theme.ToolbarBackground;
+            sidebar.style.paddingTop = 8;
+            sidebar.style.paddingBottom = 8;
+
+            // Files section
+            var filesFoldout = new Foldout { text = "Files", value = true };
+            StyleSectionFoldout(filesFoldout);
+
+            // Pinned
+            if (_pinnedFiles.Count > 0)
+            {
+                var pinnedFoldout = new Foldout { text = "Pinned", value = true };
+                StyleSubFoldout(pinnedFoldout);
+
+                foreach (var path in _pinnedFiles)
+                {
+                    if (!FileExists(path)) continue;
+                    pinnedFoldout.Add(CreateFileRow(path, true));
+                }
+
+                filesFoldout.Add(pinnedFoldout);
+            }
+
+            // Recent
+            if (_recentFiles.Count > 0)
+            {
+                var recentFoldout = new Foldout { text = "Recent", value = true };
+                StyleSubFoldout(recentFoldout);
+
+                foreach (var path in _recentFiles)
+                {
+                    if (!FileExists(path)) continue;
+                    recentFoldout.Add(CreateFileRow(path, false));
+                }
+
+                filesFoldout.Add(recentFoldout);
+            }
+
+            // All Files — folder tree
+            var allFoldout = new Foldout { text = "All Files", value = false };
+            StyleSubFoldout(allFoldout);
+
+            var mdFiles = FindAllMarkdownFiles();
+            var tree = BuildFileTree(mdFiles);
+            RenderFolderTree(allFoldout, tree);
+
+            filesFoldout.Add(allFoldout);
+            sidebar.Add(filesFoldout);
+
+            // Outline section
+            var outlineFoldout = new Foldout { text = "Outline", value = true };
+            StyleSectionFoldout(outlineFoldout);
+
+            _outlineContainer = new VisualElement();
+            outlineFoldout.Add(_outlineContainer);
+            sidebar.Add(outlineFoldout);
+
+            return sidebar;
+        }
+
+        private void StyleSectionFoldout(Foldout foldout)
+        {
+            foldout.style.marginLeft = 4;
+            foldout.style.marginRight = 4;
+            foldout.style.marginTop = 4;
+            foldout.style.marginBottom = 4;
+            var toggle = foldout.Q<Toggle>();
+            if (toggle != null)
+            {
+                var label = toggle.Q<Label>();
+                if (label != null)
+                {
+                    label.style.color = _theme.Heading;
+                    label.style.unityFontStyleAndWeight = FontStyle.Bold;
+                    label.style.fontSize = 12;
+                }
+            }
+        }
+
+        private void StyleSubFoldout(Foldout foldout)
+        {
+            foldout.style.marginLeft = 4;
+            foldout.style.marginTop = 2;
+            foldout.style.marginBottom = 2;
+            var toggle = foldout.Q<Toggle>();
+            if (toggle != null)
+            {
+                var label = toggle.Q<Label>();
+                if (label != null)
+                {
+                    label.style.color = _theme.TextMuted;
+                    label.style.unityFontStyleAndWeight = FontStyle.Bold;
+                    label.style.fontSize = 11;
+                }
+            }
+        }
+
+        private void StyleTreeFoldout(Foldout foldout)
+        {
+            foldout.style.marginLeft = 0;
+            foldout.style.marginTop = 0;
+            foldout.style.marginBottom = 0;
+            var toggle = foldout.Q<Toggle>();
+            if (toggle != null)
+            {
+                toggle.style.borderTopLeftRadius = 3;
+                toggle.style.borderTopRightRadius = 3;
+                toggle.style.borderBottomLeftRadius = 3;
+                toggle.style.borderBottomRightRadius = 3;
+                AddHoverHighlight(toggle);
+
+                // Insert folder icon between the arrow and the label.
+                // Toggle input structure: [checkmark (arrow), label].
+                // We insert the icon at index 1 so it sits between them.
+                var icon = new Image();
+                icon.image = GetFolderIcon(foldout.value);
+                icon.style.width = 14;
+                icon.style.height = 14;
+                icon.style.marginRight = 3;
+                icon.style.flexShrink = 0;
+
+                var input = toggle.Q(className: "unity-toggle__input");
+                if (input != null)
+                    input.Insert(1, icon);
+
+                // Swap icon when foldout opens/closes
+                var capturedIcon = icon;
+                foldout.RegisterValueChangedCallback(e =>
+                {
+                    capturedIcon.image = GetFolderIcon(e.newValue);
+                });
+
+                var label = toggle.Q<Label>();
+                if (label != null)
+                {
+                    label.style.color = _theme.TextBody;
+                    label.style.fontSize = 12;
+                }
+            }
+        }
+
+        private static Texture2D GetFolderIcon(bool open)
+        {
+            var content = EditorGUIUtility.IconContent(open ? "FolderOpened Icon" : "Folder Icon");
+            return content?.image as Texture2D;
+        }
+
+        private VisualElement CreateFileRow(string path, bool showUnpin)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.paddingLeft = 8;
+            row.style.paddingTop = 2;
+            row.style.paddingBottom = 2;
+            row.style.paddingRight = 4;
+            row.style.borderTopLeftRadius = 3;
+            row.style.borderTopRightRadius = 3;
+            row.style.borderBottomLeftRadius = 3;
+            row.style.borderBottomRightRadius = 3;
+
+            bool isCurrent = path == _filePath;
+            var fileName = Path.GetFileNameWithoutExtension(path);
+
+            var label = new Label(fileName);
+            label.style.fontSize = 12;
+            label.style.flexGrow = 1;
+            label.style.color = isCurrent ? _theme.Heading : _theme.TextBody;
+            if (isCurrent)
+                label.style.unityFontStyleAndWeight = FontStyle.Bold;
+            label.tooltip = path;
+
+            _fileLabels.Add((path, label));
+
+            var hoverBg = HoverBackground;
+            var capturedPath = path;
+
+            label.RegisterCallback<ClickEvent>(_ =>
+            {
+                if (capturedPath != _filePath)
+                    OpenFile(capturedPath);
+            });
+
+            row.RegisterCallback<MouseEnterEvent>(_ =>
+            {
+                row.style.backgroundColor = hoverBg;
+                if (capturedPath != _filePath)
+                    label.style.color = _theme.Heading;
+            });
+            row.RegisterCallback<MouseLeaveEvent>(_ =>
+            {
+                row.style.backgroundColor = StyleKeyword.Null;
+                label.style.color = (capturedPath == _filePath) ? _theme.Heading : _theme.TextBody;
+            });
+            label.RegisterCallback<ContextClickEvent>(_ => ShowFileContextMenu(capturedPath));
+
+            row.Add(label);
+
+            if (showUnpin)
+            {
+                var unpinBtn = new Button(() => TogglePin(capturedPath)) { text = "\u2715" };
+                unpinBtn.style.width = 18;
+                unpinBtn.style.height = 16;
+                unpinBtn.style.fontSize = 10;
+                unpinBtn.style.marginLeft = 2;
+                unpinBtn.style.paddingLeft = 0;
+                unpinBtn.style.paddingRight = 0;
+                row.Add(unpinBtn);
+            }
+
+            return row;
+        }
+
+        private static bool FileExists(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+            var full = Path.GetFullPath(Path.Combine(Application.dataPath, "..", assetPath));
+            return File.Exists(full);
+        }
+
+        private static List<string> FindAllMarkdownFiles()
+        {
+            var result = new List<string>();
+            var guids = AssetDatabase.FindAssets("t:TextAsset");
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                    result.Add(path);
+            }
+            result.Sort(StringComparer.OrdinalIgnoreCase);
+            return result;
+        }
+
+        // --- Content elements ---
 
         private VisualElement CreateTable(List<string> rows)
         {
@@ -308,14 +918,13 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             if (rows.Count == 0) return table;
 
-            // Check for separator row at index 1
             bool hasHeader = rows.Count > 1 && Regex.IsMatch(rows[1], @"^\|[\s\-:|]+\|$");
 
             int startIdx = 0;
             if (hasHeader)
             {
                 table.Add(CreateTableRow(rows[0], true));
-                startIdx = 2; // Skip header and separator
+                startIdx = 2;
             }
 
             for (int i = startIdx; i < rows.Count; i++)
@@ -384,15 +993,12 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             if (string.IsNullOrEmpty(line)) return false;
 
-            // Handle linked images: [![alt][ref]](url) or [![alt](path)](url)
-            // We strip the outer link and look at the inner content
             var linkedMatch = Regex.Match(line, @"^\[\s*(!\[.*?\]\s*(?:\[.*?\]|\(.*?\)))\s*\]\(.*?\)$");
             if (linkedMatch.Success)
             {
                 line = linkedMatch.Groups[1].Value.Trim();
             }
 
-            // Reference style: ![alt][ref] or ![][ref] or ![ref][]
             var refMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\[(?<ref>.*?)\]$");
             if (refMatch.Success)
             {
@@ -406,7 +1012,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 }
             }
 
-            // Inline style: ![alt](path)
             var inlineMatch = Regex.Match(line, @"^!\[(?<alt>.*?)\]\s*\((?<path>.*?)\)$");
             if (inlineMatch.Success)
             {
@@ -421,8 +1026,6 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private void ParseReferences()
         {
             _references.Clear();
-            // Match [id]: path (handles optional <path> and optional title)
-            // Added \s* at the beginning because Google Docs often indents these.
             var matches = Regex.Matches(_content, @"^\s*\[([^\]]+)\]:\s*<?([^>\s]+)>?(?:\s+[""(].*?["")])?\s*$", RegexOptions.Multiline);
             foreach (Match m in matches)
             {
@@ -476,6 +1079,10 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             }
 
             wrapper.Add(label);
+
+            var plainText = Regex.Replace(text, @"<.*?>", "");
+            _headings.Add((level, plainText, wrapper));
+
             return wrapper;
         }
 
@@ -651,22 +1258,13 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             if (string.IsNullOrEmpty(text)) return "";
 
-            // Decode HTML entities from source (e.g., Google Docs exports &lt; &gt; &amp;)
             text = WebUtility.HtmlDecode(text);
-
-            // Shelter angle brackets from Unity rich text parsing using placeholders
             text = text.Replace("<", "\x01").Replace(">", "\x02");
 
-            // Bold **text** or __text__
             text = Regex.Replace(text, @"(\*\*|__)(.*?)\1", "<b>$2</b>");
-
-            // Italic *text* or _text_
             text = Regex.Replace(text, @"(\*|_)(.*?)\1", "<i>$2</i>");
-
-            // Inline code `text`
             text = Regex.Replace(text, @"`(.*?)`", $"<color={_theme.InlineCodeColor}>$1</color>");
 
-            // Restore angle brackets wrapped in noparse to display literally
             text = text.Replace("\x01", "<noparse><</noparse>").Replace("\x02", "<noparse>></noparse>");
 
             return text;
