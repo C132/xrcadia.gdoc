@@ -11,70 +11,32 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 {
     public class GoogleDocMarkdownViewer : EditorWindow
     {
-        private const string PaperwhitePrefKey = "GoogleDocMarkdownViewer_Paperwhite";
+        private const string ThemePrefKey = "GoogleDocMarkdownViewer_Theme";
+        private const string LegacyPaperwhitePrefKey = "GoogleDocMarkdownViewer_Paperwhite";
 
         private string _filePath;
         private string _content;
         private Dictionary<string, string> _references = new Dictionary<string, string>();
-        private bool _paperwhite;
+        private MarkdownTheme _theme;
 
-        // -- Theme colors --------------------------------------------------
+        private static readonly string[] MonoFontNames = { "Menlo", "Consolas", "Courier New", "Courier" };
+        private static Font _monoFont;
 
-        private Color BgColor => _paperwhite
-            ? new Color(0.96f, 0.94f, 0.90f)  // warm cream
-            : new Color(0.16f, 0.16f, 0.17f);
-
-        private Color ToolbarBg => _paperwhite
-            ? new Color(0.91f, 0.89f, 0.84f)
-            : new Color(0.12f, 0.12f, 0.13f);
-
-        private Color ToolbarBorder => _paperwhite
-            ? new Color(0.82f, 0.79f, 0.74f)
-            : new Color(0.08f, 0.08f, 0.08f);
-
-        private Color TextBody => _paperwhite
-            ? new Color(0.22f, 0.20f, 0.17f)  // dark sepia
-            : new Color(0.82f, 0.82f, 0.82f);
-
-        private Color TextMuted => _paperwhite
-            ? new Color(0.42f, 0.39f, 0.35f)
-            : new Color(0.60f, 0.60f, 0.60f);
-
-        private Color HeadingColor => _paperwhite
-            ? new Color(0.14f, 0.12f, 0.10f)
-            : new Color(0.95f, 0.95f, 0.95f);
-
-        private Color RuleBorder => _paperwhite
-            ? new Color(0.78f, 0.75f, 0.70f)
-            : new Color(0.28f, 0.28f, 0.28f);
-
-        private Color CodeBg => _paperwhite
-            ? new Color(0.92f, 0.90f, 0.86f)
-            : new Color(0.13f, 0.13f, 0.14f);
-
-        private Color CodeText => _paperwhite
-            ? new Color(0.30f, 0.40f, 0.30f)
-            : new Color(0.80f, 0.90f, 0.80f);
-
-        private Color TableBg => _paperwhite
-            ? new Color(0.94f, 0.92f, 0.88f)
-            : new Color(0.20f, 0.20f, 0.20f);
-
-        private Color TableHeaderBg => _paperwhite
-            ? new Color(0.90f, 0.87f, 0.82f)
-            : new Color(0.26f, 0.26f, 0.26f);
-
-        private Color BlockquoteBorder => _paperwhite
-            ? new Color(0.72f, 0.68f, 0.60f)
-            : new Color(0.40f, 0.40f, 0.40f);
-
-        private Color BlockquoteText => _paperwhite
-            ? new Color(0.36f, 0.33f, 0.28f)
-            : new Color(0.65f, 0.65f, 0.65f);
-
-        private string InlineCodeColor => _paperwhite
-            ? "#5b6e5b"
-            : "#9cdcfe";
+        private static Font MonoFont
+        {
+            get
+            {
+                if (_monoFont == null)
+                {
+                    foreach (var name in MonoFontNames)
+                    {
+                        _monoFont = Font.CreateDynamicFontFromOSFont(name, 12);
+                        if (_monoFont != null) break;
+                    }
+                }
+                return _monoFont;
+            }
+        }
 
         public static void ShowWindow(string relativePath)
         {
@@ -107,21 +69,62 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
         public void CreateGUI()
         {
-            _paperwhite = EditorPrefs.GetBool(PaperwhitePrefKey, false);
+            _theme = LoadTheme();
             BuildUI();
         }
 
-        private void TogglePaperwhite()
+        private MarkdownTheme LoadTheme()
         {
-            _paperwhite = !_paperwhite;
-            EditorPrefs.SetBool(PaperwhitePrefKey, _paperwhite);
+            var saved = EditorPrefs.GetString(ThemePrefKey, "");
+            if (!string.IsNullOrEmpty(saved))
+                return MarkdownTheme.FindByName(saved);
+
+            // Migrate from legacy paperwhite toggle
+            if (EditorPrefs.GetBool(LegacyPaperwhitePrefKey, false))
+                return MarkdownTheme.FindByName("Paperwhite");
+
+            return MarkdownTheme.Default;
+        }
+
+        private void SetTheme(MarkdownTheme theme)
+        {
+            _theme = theme;
+            EditorPrefs.SetString(ThemePrefKey, theme.Name);
             BuildUI();
+        }
+
+        private void ShowThemeMenu()
+        {
+            var menu = new GenericMenu();
+            bool addedDarkHeader = false;
+            bool addedLightHeader = false;
+
+            foreach (var theme in MarkdownTheme.All)
+            {
+                if (!theme.IsLight && !addedDarkHeader)
+                {
+                    menu.AddDisabledItem(new GUIContent("Dark"));
+                    addedDarkHeader = true;
+                }
+                else if (theme.IsLight && !addedLightHeader)
+                {
+                    menu.AddSeparator("");
+                    menu.AddDisabledItem(new GUIContent("Light"));
+                    addedLightHeader = true;
+                }
+
+                bool isActive = theme.Name == _theme.Name;
+                var captured = theme;
+                menu.AddItem(new GUIContent("  " + theme.Name), isActive, () => SetTheme(captured));
+            }
+
+            menu.ShowAsContext();
         }
 
         private void BuildUI()
         {
             rootVisualElement.Clear();
-            rootVisualElement.style.backgroundColor = BgColor;
+            rootVisualElement.style.backgroundColor = _theme.Background;
 
             // Toolbar
             var toolbar = new VisualElement();
@@ -131,25 +134,23 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             toolbar.style.paddingRight = 10;
             toolbar.style.paddingTop = 5;
             toolbar.style.paddingBottom = 5;
-            toolbar.style.backgroundColor = ToolbarBg;
+            toolbar.style.backgroundColor = _theme.ToolbarBackground;
             toolbar.style.borderBottomWidth = 1;
-            toolbar.style.borderBottomColor = ToolbarBorder;
+            toolbar.style.borderBottomColor = _theme.ToolbarBorder;
 
             var pathLabel = new Label(_filePath);
             pathLabel.style.flexGrow = 1;
             pathLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
             pathLabel.style.fontSize = 11;
-            pathLabel.style.color = TextMuted;
+            pathLabel.style.color = _theme.TextMuted;
 
             toolbar.Add(pathLabel);
 
-            var paperwhiteBtn = new Button(TogglePaperwhite)
-            {
-                text = _paperwhite ? "Dark" : "Paperwhite"
-            };
-            paperwhiteBtn.style.height = 20;
-            paperwhiteBtn.style.marginRight = 4;
-            toolbar.Add(paperwhiteBtn);
+            var themeBtn = new Button(() => ShowThemeMenu()) { text = _theme.Name + " \u25BE" };
+            themeBtn.style.width = 140;
+            themeBtn.style.height = 20;
+            themeBtn.style.marginRight = 4;
+            toolbar.Add(themeBtn);
 
             var reloadBtn = new Button(Refresh) { text = "Reload" };
             reloadBtn.style.height = 20;
@@ -295,11 +296,11 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             table.style.borderBottomWidth = 1;
             table.style.borderLeftWidth = 1;
             table.style.borderRightWidth = 1;
-            table.style.borderTopColor = RuleBorder;
-            table.style.borderBottomColor = RuleBorder;
-            table.style.borderLeftColor = RuleBorder;
-            table.style.borderRightColor = RuleBorder;
-            table.style.backgroundColor = TableBg;
+            table.style.borderTopColor = _theme.RuleBorder;
+            table.style.borderBottomColor = _theme.RuleBorder;
+            table.style.borderLeftColor = _theme.RuleBorder;
+            table.style.borderRightColor = _theme.RuleBorder;
+            table.style.backgroundColor = _theme.TableBackground;
             table.style.borderTopLeftRadius = 3;
             table.style.borderTopRightRadius = 3;
             table.style.borderBottomLeftRadius = 3;
@@ -330,10 +331,10 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             var rowElement = new VisualElement();
             rowElement.style.flexDirection = FlexDirection.Row;
             if (isHeader)
-                rowElement.style.backgroundColor = TableHeaderBg;
+                rowElement.style.backgroundColor = _theme.TableHeaderBackground;
 
             rowElement.style.borderBottomWidth = 1;
-            rowElement.style.borderBottomColor = RuleBorder;
+            rowElement.style.borderBottomColor = _theme.RuleBorder;
 
             var cellTexts = row.Trim('|').Split('|');
             foreach (var cellText in cellTexts)
@@ -346,7 +347,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 cell.style.paddingTop = 7;
                 cell.style.paddingBottom = 7;
                 cell.style.borderRightWidth = 1;
-                cell.style.borderRightColor = RuleBorder;
+                cell.style.borderRightColor = _theme.RuleBorder;
 
                 ProcessCellContent(cell, cellText, isHeader);
                 rowElement.Add(cell);
@@ -370,7 +371,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 label.enableRichText = true;
                 label.style.whiteSpace = WhiteSpace.Normal;
                 label.style.fontSize = 13;
-                label.style.color = TextBody;
+                label.style.color = _theme.TextBody;
                 if (isHeader) label.style.unityFontStyleAndWeight = FontStyle.Bold;
                 cell.Add(label);
             }
@@ -398,7 +399,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 alt = refMatch.Groups["alt"].Value;
                 string refKey = refMatch.Groups["ref"].Value;
                 if (string.IsNullOrEmpty(refKey)) refKey = alt;
-                
+
                 if (_references.TryGetValue(refKey, out path))
                 {
                     return true;
@@ -442,7 +443,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             label.enableRichText = true;
             label.style.unityFontStyleAndWeight = FontStyle.Bold;
             label.style.whiteSpace = WhiteSpace.Normal;
-            label.style.color = HeadingColor;
+            label.style.color = _theme.Heading;
 
             switch (level)
             {
@@ -452,7 +453,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     wrapper.style.marginBottom = 12;
                     wrapper.style.paddingBottom = 8;
                     wrapper.style.borderBottomWidth = 1;
-                    wrapper.style.borderBottomColor = RuleBorder;
+                    wrapper.style.borderBottomColor = _theme.RuleBorder;
                     break;
                 case 2:
                     label.style.fontSize = 22;
@@ -460,7 +461,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     wrapper.style.marginBottom = 8;
                     wrapper.style.paddingBottom = 6;
                     wrapper.style.borderBottomWidth = 1;
-                    wrapper.style.borderBottomColor = RuleBorder;
+                    wrapper.style.borderBottomColor = _theme.RuleBorder;
                     break;
                 case 3:
                     label.style.fontSize = 18;
@@ -484,7 +485,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             label.enableRichText = true;
             label.style.whiteSpace = WhiteSpace.Normal;
             label.style.fontSize = 14;
-            label.style.color = TextBody;
+            label.style.color = _theme.TextBody;
             label.style.marginBottom = 6;
             return label;
         }
@@ -509,7 +510,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             }
 
             bullet.style.fontSize = 14;
-            bullet.style.color = TextBody;
+            bullet.style.color = _theme.TextBody;
             container.Add(bullet);
 
             string text = Regex.Replace(line.TrimStart(), @"^([-*]|\d+\.)\s+", "");
@@ -517,7 +518,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             label.enableRichText = true;
             label.style.whiteSpace = WhiteSpace.Normal;
             label.style.fontSize = 14;
-            label.style.color = TextBody;
+            label.style.color = _theme.TextBody;
             label.style.flexGrow = 1;
             container.Add(label);
 
@@ -534,14 +535,14 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.style.paddingTop = 4;
             container.style.paddingBottom = 4;
             container.style.borderLeftWidth = 3;
-            container.style.borderLeftColor = BlockquoteBorder;
+            container.style.borderLeftColor = _theme.BlockquoteBorder;
 
             string text = line.TrimStart().Substring(1).Trim();
             var label = new Label(ProcessRichText(text));
             label.enableRichText = true;
             label.style.whiteSpace = WhiteSpace.Normal;
             label.style.fontSize = 14;
-            label.style.color = BlockquoteText;
+            label.style.color = _theme.BlockquoteText;
             label.style.unityFontStyleAndWeight = FontStyle.Italic;
             container.Add(label);
 
@@ -551,7 +552,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private VisualElement CreateCodeBlock(string code)
         {
             var container = new VisualElement();
-            container.style.backgroundColor = CodeBg;
+            container.style.backgroundColor = _theme.CodeBackground;
             container.style.paddingLeft = 14;
             container.style.paddingRight = 14;
             container.style.paddingTop = 10;
@@ -566,18 +567,17 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.style.borderBottomWidth = 1;
             container.style.borderLeftWidth = 1;
             container.style.borderRightWidth = 1;
-            container.style.borderTopColor = RuleBorder;
-            container.style.borderBottomColor = RuleBorder;
-            container.style.borderLeftColor = RuleBorder;
-            container.style.borderRightColor = RuleBorder;
+            container.style.borderTopColor = _theme.RuleBorder;
+            container.style.borderBottomColor = _theme.RuleBorder;
+            container.style.borderLeftColor = _theme.RuleBorder;
+            container.style.borderRightColor = _theme.RuleBorder;
 
             var label = new Label(WebUtility.HtmlDecode(code));
-            var monoStyle = GUI.skin.FindStyle("monospacedLabel") ?? GUI.skin.FindStyle("TextArea");
-            if (monoStyle != null && monoStyle.font != null)
-                label.style.unityFont = monoStyle.font;
+            if (MonoFont != null)
+                label.style.unityFont = MonoFont;
 
             label.style.fontSize = 12;
-            label.style.color = CodeText;
+            label.style.color = _theme.CodeText;
             container.Add(label);
 
             return container;
@@ -614,7 +614,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             else
             {
                 var errorLabel = new Label($"[Image missing: {path}]");
-                errorLabel.style.color = TextMuted;
+                errorLabel.style.color = _theme.TextMuted;
                 errorLabel.style.fontSize = 11;
                 container.Add(errorLabel);
             }
@@ -623,7 +623,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             {
                 var altLabel = new Label(alt);
                 altLabel.style.fontSize = 11;
-                altLabel.style.color = TextMuted;
+                altLabel.style.color = _theme.TextMuted;
                 altLabel.style.marginTop = 4;
                 container.Add(altLabel);
             }
@@ -640,7 +640,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             var hr = new VisualElement();
             hr.style.height = 1;
-            hr.style.backgroundColor = RuleBorder;
+            hr.style.backgroundColor = _theme.RuleBorder;
             hr.style.width = new StyleLength(new Length(60, LengthUnit.Percent));
             container.Add(hr);
 
@@ -664,7 +664,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             text = Regex.Replace(text, @"(\*|_)(.*?)\1", "<i>$2</i>");
 
             // Inline code `text`
-            text = Regex.Replace(text, @"`(.*?)`", $"<color={InlineCodeColor}>$1</color>");
+            text = Regex.Replace(text, @"`(.*?)`", $"<color={_theme.InlineCodeColor}>$1</color>");
 
             // Restore angle brackets wrapped in noparse to display literally
             text = text.Replace("\x01", "<noparse><</noparse>").Replace("\x02", "<noparse>></noparse>");

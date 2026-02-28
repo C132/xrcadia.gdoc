@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-02-27
+
+### Added
+- **Theme system with 11 built-in themes.** The Markdown Viewer now offers a grouped dropdown in the toolbar organized by Dark and Light sections. Includes Dark, Solarized Dark, Nord, Dracula, Monokai, One Dark, Gruvbox Dark, GitHub Dark, Paperwhite, Solarized Light, and GitHub themes. The selected theme persists across sessions via EditorPrefs.
+
+### Changed
+- **Theme architecture extracted to follow OCP.** Color definitions moved from inline ternary properties in the viewer to an abstract `MarkdownTheme` base class (`Editor/MarkdownTheme.cs`) with sealed subclasses for each theme. Adding a new theme requires only a new subclass and one registry entry. The old paperwhite toggle button has been replaced by the theme dropdown, with automatic migration from the legacy preference.
+
+### Fixed
+- **Code block font lookup no longer uses IMGUI.** Replaced `GUI.skin.FindStyle()` with a cached `Font.CreateDynamicFontFromOSFont()` call to avoid `ArgumentException` when rebuilding the UI outside of an `OnGUI` context (e.g., when switching themes via the dropdown).
+
 ## [1.3.1] - 2026-02-27
 
 ### Fixed
