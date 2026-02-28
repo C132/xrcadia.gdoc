@@ -41,6 +41,9 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private static readonly Regex RxLinkedImage = new Regex(@"^\[\s*(!\[.*?\]\s*(?:\[.*?\]|\(.*?\)))\s*\]\(.*?\)$", RegexOptions.Compiled);
         private static readonly Regex RxRefImage = new Regex(@"^!\[(?<alt>.*?)\]\s*\[(?<ref>.*?)\]$", RegexOptions.Compiled);
         private static readonly Regex RxInlineImage = new Regex(@"^!\[(?<alt>.*?)\]\s*\((?<path>.*?)\)$", RegexOptions.Compiled);
+        private static readonly Regex RxStrikethrough = new Regex(@"~~(.*?)~~", RegexOptions.Compiled);
+        private static readonly Regex RxLink = new Regex(@"\[([^\]]+)\]\([^\)]+\)", RegexOptions.Compiled);
+        private static readonly Regex RxEscape = new Regex(@"\\([^A-Za-z0-9\s])", RegexOptions.Compiled);
 
         // --- State ---
         private string _filePath;
@@ -1162,8 +1165,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             wrapper.Add(label);
 
-            var plainText = RxStripTags.Replace(text, "");
-            _headings.Add((level, plainText, wrapper));
+            _headings.Add((level, StripMarkdownFormatting(text), wrapper));
 
             return wrapper;
         }
@@ -1335,6 +1337,20 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.Add(hr);
 
             return container;
+        }
+
+        private static string StripMarkdownFormatting(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            text = WebUtility.HtmlDecode(text);
+            text = RxStrikethrough.Replace(text, "$1");
+            text = RxBold.Replace(text, "$2");
+            text = RxItalic.Replace(text, "$2");
+            text = RxInlineCode.Replace(text, "$1");
+            text = RxLink.Replace(text, "$1");
+            text = RxStripTags.Replace(text, "");
+            text = RxEscape.Replace(text, "$1");
+            return text.Trim();
         }
 
         private string ProcessRichText(string text)

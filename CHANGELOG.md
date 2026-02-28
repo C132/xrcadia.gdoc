@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resizable sidebar with drag handle.** A drag handle between the sidebar and content pane allows resizing from 140px to 500px. The handle shows an OS-level horizontal resize cursor, highlights subtly on hover, and persists the chosen width across sessions.
 - **Subtle hover highlighting across the sidebar.** File rows, folder tree entries, and outline headings show a rounded background highlight on hover for clear interactive feedback.
 - **Settings gear with dot-path toggle.** A gear icon (⚙) in the toolbar opens a settings menu. The first option toggles "Expand package dots to folders," which controls whether `com.unity.burst` is expanded into a `unity/burst` folder hierarchy or kept as a single entry. The preference persists via EditorPrefs.
+- **Comprehensive TEST.md test document.** A `TEST.md` file at the package root exercises every standard Markdown feature: headings, inline formatting, lists, blockquotes, code blocks, tables, images, links, HTML entities, nested structures, edge cases, and extended syntax (footnotes, task lists, math, admonitions). Serves as a visual regression test for the viewer.
 
 ### Changed
 - **Switching files no longer rebuilds the sidebar.** Opening a file from the browser or outline only re-renders the content pane and outline. The file browser tree preserves its foldout state and scroll position, so navigating between files feels seamless.
 - **Performance optimization pass.** All 13 regex patterns are now compiled once as `static readonly` fields instead of being allocated per render. The markdown file list and folder tree are cached and only rebuilt on explicit refresh. Code block accumulation uses `StringBuilder` instead of string concatenation. Character-level guards skip regex matching for lines that cannot match. Folder icons are cached as static `Texture2D` references.
+
+### Fixed
+- **Outline strips markdown formatting.** Heading text in the sidebar outline now strips bold (`**`), italic (`*`), inline code, strikethrough, link syntax, and backslash escapes so entries display as clean plain text instead of showing raw markdown markers.
+- **Folder icon state no longer corrupted by child foldouts.** Collapsing a subfolder in the file browser no longer causes parent folder icons to show the closed state. The icon now reads the foldout's own `.value` property instead of the bubbled `ChangeEvent` value.
 
 ## [1.4.0] - 2026-02-27
 
