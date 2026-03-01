@@ -451,21 +451,41 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             toolbar.style.borderBottomWidth = 1;
             toolbar.style.borderBottomColor = _theme.ToolbarBorder;
 
-            var sidebarBtn = new Label(_sidebarOpen ? "\u25C0" : "\u2261");
-            sidebarBtn.style.width = 22;
-            sidebarBtn.style.height = 20;
-            sidebarBtn.style.marginRight = 6;
-            sidebarBtn.style.fontSize = 13;
+            var sidebarBtnColor = _sidebarOpen ? _theme.Heading : _theme.TextMuted;
+            var sidebarBtn = new Label("\u25E7");
+            sidebarBtn.style.width = 28;
+            sidebarBtn.style.height = 22;
+            sidebarBtn.style.marginRight = 4;
+            sidebarBtn.style.marginLeft = 2;
+            sidebarBtn.style.paddingTop = 0;
+            sidebarBtn.style.paddingBottom = 0;
+            sidebarBtn.style.paddingLeft = 0;
+            sidebarBtn.style.paddingRight = 0;
+            sidebarBtn.style.fontSize = 20;
             sidebarBtn.style.unityTextAlign = TextAnchor.MiddleCenter;
-            sidebarBtn.style.color = _theme.TextMuted;
+            sidebarBtn.style.color = sidebarBtnColor;
+            sidebarBtn.style.borderTopLeftRadius = 3;
+            sidebarBtn.style.borderTopRightRadius = 3;
+            sidebarBtn.style.borderBottomLeftRadius = 3;
+            sidebarBtn.style.borderBottomRightRadius = 3;
+            sidebarBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            // Hover effects handle clickability feedback
             sidebarBtn.RegisterCallback<ClickEvent>(_ =>
             {
                 _sidebarOpen = !_sidebarOpen;
                 EditorPrefs.SetBool(SidebarPrefKey, _sidebarOpen);
                 BuildUI();
             });
-            sidebarBtn.RegisterCallback<MouseEnterEvent>(_ => sidebarBtn.style.color = _theme.Heading);
-            sidebarBtn.RegisterCallback<MouseLeaveEvent>(_ => sidebarBtn.style.color = _theme.TextMuted);
+            sidebarBtn.RegisterCallback<MouseEnterEvent>(_ =>
+            {
+                sidebarBtn.style.color = _theme.Heading;
+                sidebarBtn.style.backgroundColor = new Color(_theme.Heading.r, _theme.Heading.g, _theme.Heading.b, 0.08f);
+            });
+            sidebarBtn.RegisterCallback<MouseLeaveEvent>(_ =>
+            {
+                sidebarBtn.style.color = _sidebarOpen ? _theme.Heading : _theme.TextMuted;
+                sidebarBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            });
             toolbar.Add(sidebarBtn);
 
             _pathLabel = new Label(_filePath);
@@ -482,20 +502,63 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             toolbar.Add(themeBtn);
 
             // Settings gear
-            var gearBtn = new Label("\u2699");
+            var settingsIcon = EditorGUIUtility.IconContent("_Popup")?.image as Texture2D;
+            var gearBtn = new VisualElement();
             gearBtn.style.width = 22;
-            gearBtn.style.height = 20;
+            gearBtn.style.height = 22;
             gearBtn.style.marginRight = 4;
-            gearBtn.style.fontSize = 15;
-            gearBtn.style.unityTextAlign = TextAnchor.MiddleCenter;
-            gearBtn.style.color = _theme.TextMuted;
+            gearBtn.style.backgroundImage = settingsIcon;
+            gearBtn.style.backgroundSize = new BackgroundSize(BackgroundSizeType.Contain);
+            gearBtn.style.backgroundPositionX = new BackgroundPosition(BackgroundPositionKeyword.Center);
+            gearBtn.style.backgroundPositionY = new BackgroundPosition(BackgroundPositionKeyword.Center);
+            gearBtn.style.backgroundRepeat = new BackgroundRepeat(Repeat.NoRepeat, Repeat.NoRepeat);
+            gearBtn.style.opacity = 0.5f;
+            gearBtn.style.borderTopLeftRadius = 3;
+            gearBtn.style.borderTopRightRadius = 3;
+            gearBtn.style.borderBottomLeftRadius = 3;
+            gearBtn.style.borderBottomRightRadius = 3;
+            gearBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            gearBtn.style.cursor = LinkCursor;
             gearBtn.RegisterCallback<ClickEvent>(_ => ShowSettingsMenu());
-            gearBtn.RegisterCallback<MouseEnterEvent>(_ => gearBtn.style.color = _theme.Heading);
-            gearBtn.RegisterCallback<MouseLeaveEvent>(_ => gearBtn.style.color = _theme.TextMuted);
+            gearBtn.RegisterCallback<MouseEnterEvent>(_ =>
+            {
+                gearBtn.style.opacity = 1f;
+                gearBtn.style.backgroundColor = new Color(_theme.Heading.r, _theme.Heading.g, _theme.Heading.b, 0.08f);
+            });
+            gearBtn.RegisterCallback<MouseLeaveEvent>(_ =>
+            {
+                gearBtn.style.opacity = 0.5f;
+                gearBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            });
             toolbar.Add(gearBtn);
 
-            var reloadBtn = new Button(Refresh) { text = "Reload" };
-            reloadBtn.style.height = 20;
+            var refreshIcon = EditorGUIUtility.IconContent("Refresh")?.image as Texture2D;
+            var reloadBtn = new VisualElement();
+            reloadBtn.style.width = 22;
+            reloadBtn.style.height = 22;
+            reloadBtn.style.backgroundImage = refreshIcon;
+            reloadBtn.style.backgroundSize = new BackgroundSize(BackgroundSizeType.Contain);
+            reloadBtn.style.backgroundPositionX = new BackgroundPosition(BackgroundPositionKeyword.Center);
+            reloadBtn.style.backgroundPositionY = new BackgroundPosition(BackgroundPositionKeyword.Center);
+            reloadBtn.style.backgroundRepeat = new BackgroundRepeat(Repeat.NoRepeat, Repeat.NoRepeat);
+            reloadBtn.style.opacity = 0.5f;
+            reloadBtn.style.borderTopLeftRadius = 3;
+            reloadBtn.style.borderTopRightRadius = 3;
+            reloadBtn.style.borderBottomLeftRadius = 3;
+            reloadBtn.style.borderBottomRightRadius = 3;
+            reloadBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            reloadBtn.style.cursor = LinkCursor;
+            reloadBtn.RegisterCallback<ClickEvent>(_ => Refresh());
+            reloadBtn.RegisterCallback<MouseEnterEvent>(_ =>
+            {
+                reloadBtn.style.opacity = 1f;
+                reloadBtn.style.backgroundColor = new Color(_theme.Heading.r, _theme.Heading.g, _theme.Heading.b, 0.08f);
+            });
+            reloadBtn.RegisterCallback<MouseLeaveEvent>(_ =>
+            {
+                reloadBtn.style.opacity = 0.5f;
+                reloadBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+            });
             toolbar.Add(reloadBtn);
 
             rootVisualElement.Add(toolbar);
@@ -708,7 +771,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 foreach (var path in _pinnedFiles)
                 {
                     if (!FileExists(path)) continue;
-                    pinnedFoldout.Add(CreateFileRow(path, true));
+                    pinnedFoldout.Add(CreateFileRow(path, true, showShallowPath: true));
                 }
 
                 filesFoldout.Add(pinnedFoldout);
@@ -723,7 +786,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 foreach (var path in _recentFiles)
                 {
                     if (!FileExists(path)) continue;
-                    recentFoldout.Add(CreateFileRow(path, false));
+                    recentFoldout.Add(CreateFileRow(path, false, showShallowPath: true));
                 }
 
                 filesFoldout.Add(recentFoldout);
@@ -827,7 +890,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             }
         }
 
-        private VisualElement CreateFileRow(string path, bool showUnpin)
+        private VisualElement CreateFileRow(string path, bool showUnpin, bool showShallowPath = false)
         {
             var row = new VisualElement();
             row.style.flexDirection = FlexDirection.Row;
@@ -843,8 +906,19 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             bool isCurrent = path == _filePath;
             var fileName = Path.GetFileNameWithoutExtension(path);
+            var displayName = fileName;
+            if (showShallowPath)
+            {
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    var parentDir = Path.GetFileName(dir);
+                    if (!string.IsNullOrEmpty(parentDir))
+                        displayName = parentDir + "/" + fileName;
+                }
+            }
 
-            var label = new Label(fileName);
+            var label = new Label(displayName);
             label.style.fontSize = 12;
             label.style.flexGrow = 1;
             label.style.color = isCurrent ? _theme.Heading : _theme.TextBody;
