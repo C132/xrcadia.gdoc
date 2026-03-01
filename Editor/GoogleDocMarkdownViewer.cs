@@ -44,6 +44,14 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private static readonly Regex RxStrikethrough = new Regex(@"~~(.*?)~~", RegexOptions.Compiled);
         private static readonly Regex RxLink = new Regex(@"\[([^\]]+)\]\([^\)]+\)", RegexOptions.Compiled);
         private static readonly Regex RxEscape = new Regex(@"\\([^A-Za-z0-9\s])", RegexOptions.Compiled);
+        private static readonly Regex RxRefLink = new Regex(@"(?<!!)\[([^\]]+)\]\[([^\]]*)\]", RegexOptions.Compiled);
+        private static readonly Regex RxInlineLink = new Regex(@"(?<!!)\[([^\]]+)\]\(([^\)]*?)(?:\s+""[^""]*"")?\)", RegexOptions.Compiled);
+        private static readonly Regex RxTaskList = new Regex(@"^(\s*[-*])\s+\[([ xX])\]\s+(.*)", RegexOptions.Compiled);
+        private static readonly Regex RxAlertType = new Regex(@"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]", RegexOptions.Compiled);
+        private static readonly Regex RxInlineHtml = new Regex(@"<(/?)(strong|em|b|i|s|u|kbd|mark|sup|sub|del)(\s[^>]*)?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex RxBlockHtml = new Regex(@"</?(?:p|div|details|summary|section|article|aside|nav|header|footer|main|figure|figcaption|br\s*/?)(?:\s[^>]*)?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex RxBareUrl = new Regex(@"(?<![""(])\bhttps?://[^\s<>\[\]""'`)]+", RegexOptions.Compiled);
+        private static readonly Regex RxBareEmail = new Regex(@"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b", RegexOptions.Compiled);
 
         // --- State ---
         private string _filePath;
@@ -63,6 +71,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         private List<(string path, Label label)> _fileLabels = new List<(string, Label)>();
         private List<string> _pinnedFiles = new List<string>();
         private List<string> _recentFiles = new List<string>();
+        private readonly List<string> _processedLinks = new List<string>();
 
         // --- Cached file data (rebuilt on full BuildUI, not per-file-switch) ---
         private List<string> _cachedMdFiles;
@@ -99,6 +108,17 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 if (_resizeCursor == null)
                     _resizeCursor = CreateSystemCursor(MouseCursor.ResizeHorizontal);
                 return _resizeCursor.Value;
+            }
+        }
+
+        private static StyleCursor? _linkCursor;
+        private static StyleCursor LinkCursor
+        {
+            get
+            {
+                if (_linkCursor == null)
+                    _linkCursor = CreateSystemCursor(MouseCursor.Link);
+                return _linkCursor.Value;
             }
         }
 
@@ -588,108 +608,8 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             if (!string.IsNullOrEmpty(_content))
             {
                 ParseReferences();
-
                 var lines = _content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-                bool inCodeBlock = false;
-                var codeBuilder = new StringBuilder();
-                List<string> tableLines = new List<string>();
-
-                foreach (var line in lines)
-                {
-                    var trimmedLine = line.TrimStart();
-                    // Quick length guard before StartsWith on trimmed
-                    int trimLen = trimmedLine.Length;
-
-                    if (trimLen >= 3 && trimmedLine[0] == '`' && trimmedLine[1] == '`' && trimmedLine[2] == '`')
-                    {
-                        if (tableLines.Count > 0)
-                        {
-                            _page.Add(CreateTable(tableLines));
-                            tableLines.Clear();
-                        }
-
-                        if (inCodeBlock)
-                        {
-                            _page.Add(CreateCodeBlock(codeBuilder.ToString().TrimEnd()));
-                            codeBuilder.Clear();
-                            inCodeBlock = false;
-                        }
-                        else
-                        {
-                            inCodeBlock = true;
-                        }
-                        continue;
-                    }
-
-                    if (inCodeBlock)
-                    {
-                        codeBuilder.AppendLine(line);
-                        continue;
-                    }
-
-                    if (trimLen > 0 && trimmedLine[0] == '|' && trimmedLine[trimLen - 1] == '|')
-                    {
-                        tableLines.Add(trimmedLine);
-                        continue;
-                    }
-                    else if (tableLines.Count > 0)
-                    {
-                        _page.Add(CreateTable(tableLines));
-                        tableLines.Clear();
-                    }
-
-                    if (trimLen > 0 && trimmedLine[0] == '#')
-                    {
-                        _page.Add(CreateHeader(trimmedLine));
-                        continue;
-                    }
-
-                    if (trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___")
-                    {
-                        _page.Add(CreateHorizontalRule());
-                        continue;
-                    }
-
-                    if (TryMatchImage(trimmedLine, out var imgPath, out var altText))
-                    {
-                        _page.Add(CreateImage(imgPath, altText));
-                        continue;
-                    }
-
-                    if (trimLen >= 2 && ((trimmedLine[0] == '-' || trimmedLine[0] == '*') && trimmedLine[1] == ' ')
-                        || RxOrderedList.IsMatch(trimmedLine))
-                    {
-                        _page.Add(CreateListItem(line));
-                        continue;
-                    }
-
-                    if (trimLen >= 2 && trimmedLine[0] == '>' && trimmedLine[1] == ' ')
-                    {
-                        _page.Add(CreateBlockquote(line));
-                        continue;
-                    }
-
-                    if (RxRefDef.IsMatch(trimmedLine))
-                    {
-                        continue;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        _page.Add(CreateParagraph(line));
-                    }
-                    else
-                    {
-                        var spacer = new VisualElement { style = { height = 8 } };
-                        _page.Add(spacer);
-                    }
-                }
-
-                if (tableLines.Count > 0)
-                {
-                    _page.Add(CreateTable(tableLines));
-                }
+                RenderMarkdownLines(_page, lines);
             }
 
             RebuildOutline();
@@ -980,6 +900,267 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return File.Exists(full);
         }
 
+        // --- Markdown line renderer (recursive for blockquotes) ---
+
+        private void RenderMarkdownLines(VisualElement parent, string[] lines)
+        {
+            bool inCodeBlock = false;
+            string codeLang = null;
+            var codeBuilder = new StringBuilder();
+            var tableLines = new List<string>();
+            var blockquoteLines = new List<string>();
+            bool prevLineBlank = true;
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                var trimmedLine = line.TrimStart();
+                int trimLen = trimmedLine.Length;
+
+                // --- Code fence detection (backticks and tildes) ---
+                bool isBacktickFence = trimLen >= 3 && trimmedLine[0] == '`' && trimmedLine[1] == '`' && trimmedLine[2] == '`';
+                bool isTildeFence = !isBacktickFence && trimLen >= 3 && trimmedLine[0] == '~' && trimmedLine[1] == '~' && trimmedLine[2] == '~';
+
+                if (isBacktickFence || isTildeFence)
+                {
+                    FlushBlockquote(parent, blockquoteLines);
+                    FlushTable(parent, tableLines);
+
+                    if (inCodeBlock)
+                    {
+                        parent.Add(CreateCodeBlock(codeBuilder.ToString().TrimEnd(), codeLang));
+                        codeBuilder.Clear();
+                        codeLang = null;
+                        inCodeBlock = false;
+                    }
+                    else
+                    {
+                        inCodeBlock = true;
+                        codeLang = trimmedLine.Substring(3).Trim();
+                        if (string.IsNullOrEmpty(codeLang)) codeLang = null;
+                    }
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                if (inCodeBlock)
+                {
+                    codeBuilder.AppendLine(line);
+                    continue;
+                }
+
+                // --- Table accumulation ---
+                if (trimLen > 0 && trimmedLine[0] == '|' && trimmedLine[trimLen - 1] == '|')
+                {
+                    FlushBlockquote(parent, blockquoteLines);
+                    tableLines.Add(trimmedLine);
+                    prevLineBlank = false;
+                    continue;
+                }
+                FlushTable(parent, tableLines);
+
+                // --- Blockquote accumulation ---
+                if (trimLen > 0 && trimmedLine[0] == '>')
+                {
+                    blockquoteLines.Add(trimmedLine);
+                    prevLineBlank = false;
+                    continue;
+                }
+                FlushBlockquote(parent, blockquoteLines);
+
+                // --- Heading ---
+                if (trimLen > 0 && trimmedLine[0] == '#')
+                {
+                    parent.Add(CreateHeader(trimmedLine));
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- Horizontal rule ---
+                if (trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___")
+                {
+                    parent.Add(CreateHorizontalRule());
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- Image ---
+                if (TryMatchImage(trimmedLine, out var imgPath, out var altText))
+                {
+                    parent.Add(CreateImage(imgPath, altText));
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- List item ---
+                if (trimLen >= 2 && ((trimmedLine[0] == '-' || trimmedLine[0] == '*') && trimmedLine[1] == ' ')
+                    || RxOrderedList.IsMatch(trimmedLine))
+                {
+                    parent.Add(CreateListItem(line));
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- Reference definition ---
+                if (RxRefDef.IsMatch(trimmedLine))
+                {
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- Indented code block (4+ spaces after a blank line) ---
+                if (prevLineBlank && line.Length >= 4 && line[0] == ' ' && line[1] == ' '
+                    && line[2] == ' ' && line[3] == ' ' && !string.IsNullOrWhiteSpace(line))
+                {
+                    var indentBuilder = new StringBuilder();
+                    int j = i;
+                    while (j < lines.Length)
+                    {
+                        if (lines[j].Length >= 4 && lines[j][0] == ' ' && lines[j][1] == ' '
+                            && lines[j][2] == ' ' && lines[j][3] == ' ')
+                            indentBuilder.AppendLine(lines[j].Substring(4));
+                        else if (string.IsNullOrWhiteSpace(lines[j]))
+                            indentBuilder.AppendLine();
+                        else
+                            break;
+                        j++;
+                    }
+                    parent.Add(CreateCodeBlock(indentBuilder.ToString().TrimEnd(), null));
+                    i = j - 1;
+                    prevLineBlank = false;
+                    continue;
+                }
+
+                // --- Paragraph or blank line ---
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    parent.Add(CreateParagraph(line));
+                    prevLineBlank = false;
+                }
+                else
+                {
+                    var spacer = new VisualElement { style = { height = 8 } };
+                    parent.Add(spacer);
+                    prevLineBlank = true;
+                }
+            }
+
+            FlushTable(parent, tableLines);
+            FlushBlockquote(parent, blockquoteLines);
+        }
+
+        private void FlushTable(VisualElement parent, List<string> tableLines)
+        {
+            if (tableLines.Count > 0)
+            {
+                parent.Add(CreateTable(tableLines));
+                tableLines.Clear();
+            }
+        }
+
+        private void FlushBlockquote(VisualElement parent, List<string> blockquoteLines)
+        {
+            if (blockquoteLines.Count > 0)
+            {
+                parent.Add(CreateBlockquoteGroup(blockquoteLines));
+                blockquoteLines.Clear();
+            }
+        }
+
+        private VisualElement CreateBlockquoteGroup(List<string> lines)
+        {
+            var strippedLines = new List<string>();
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("> "))
+                    strippedLines.Add(line.Substring(2));
+                else if (line.StartsWith(">"))
+                    strippedLines.Add(line.Substring(1));
+                else
+                    strippedLines.Add(line);
+            }
+
+            // Check for alert/admonition
+            if (strippedLines.Count > 0)
+            {
+                var alertMatch = RxAlertType.Match(strippedLines[0]);
+                if (alertMatch.Success)
+                {
+                    string alertType = alertMatch.Groups[1].Value;
+                    strippedLines[0] = strippedLines[0].Substring(alertMatch.Length).TrimStart();
+                    if (string.IsNullOrWhiteSpace(strippedLines[0]))
+                        strippedLines.RemoveAt(0);
+                    return CreateAlert(alertType, strippedLines);
+                }
+            }
+
+            var container = new VisualElement();
+            container.style.marginLeft = 12;
+            container.style.marginTop = 8;
+            container.style.marginBottom = 8;
+            container.style.paddingLeft = 16;
+            container.style.paddingTop = 4;
+            container.style.paddingBottom = 4;
+            container.style.borderLeftWidth = 3;
+            container.style.borderLeftColor = _theme.BlockquoteBorder;
+
+            RenderMarkdownLines(container, strippedLines.ToArray());
+            return container;
+        }
+
+        private VisualElement CreateAlert(string type, List<string> contentLines)
+        {
+            Color borderColor;
+            string label;
+            switch (type.ToUpperInvariant())
+            {
+                case "NOTE":
+                    borderColor = new Color(0.33f, 0.53f, 0.85f);
+                    label = "Note";
+                    break;
+                case "TIP":
+                    borderColor = new Color(0.20f, 0.69f, 0.40f);
+                    label = "Tip";
+                    break;
+                case "IMPORTANT":
+                    borderColor = new Color(0.55f, 0.36f, 0.85f);
+                    label = "Important";
+                    break;
+                case "WARNING":
+                    borderColor = new Color(0.81f, 0.67f, 0.20f);
+                    label = "Warning";
+                    break;
+                case "CAUTION":
+                    borderColor = new Color(0.85f, 0.30f, 0.30f);
+                    label = "Caution";
+                    break;
+                default:
+                    borderColor = _theme.BlockquoteBorder;
+                    label = type;
+                    break;
+            }
+
+            var container = new VisualElement();
+            container.style.marginLeft = 12;
+            container.style.marginTop = 8;
+            container.style.marginBottom = 8;
+            container.style.paddingLeft = 16;
+            container.style.paddingTop = 8;
+            container.style.paddingBottom = 8;
+            container.style.borderLeftWidth = 3;
+            container.style.borderLeftColor = borderColor;
+
+            var title = new Label(label);
+            title.style.fontSize = 14;
+            title.style.unityFontStyleAndWeight = FontStyle.Bold;
+            title.style.color = borderColor;
+            title.style.marginBottom = 4;
+            container.Add(title);
+
+            RenderMarkdownLines(container, contentLines.ToArray());
+            return container;
+        }
+
         // --- Content elements ---
 
         private VisualElement CreateTable(List<string> rows)
@@ -1005,22 +1186,42 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
 
             bool hasHeader = rows.Count > 1 && RxTableSep.IsMatch(rows[1]);
 
+            // Parse column alignment from separator row.
+            TextAnchor[] alignments = null;
+            if (hasHeader)
+            {
+                var sepCells = rows[1].Trim('|').Split('|');
+                alignments = new TextAnchor[sepCells.Length];
+                for (int c = 0; c < sepCells.Length; c++)
+                {
+                    var sep = sepCells[c].Trim();
+                    bool leftColon = sep.Length > 0 && sep[0] == ':';
+                    bool rightColon = sep.Length > 0 && sep[sep.Length - 1] == ':';
+                    if (leftColon && rightColon)
+                        alignments[c] = TextAnchor.MiddleCenter;
+                    else if (rightColon)
+                        alignments[c] = TextAnchor.MiddleRight;
+                    else
+                        alignments[c] = TextAnchor.MiddleLeft;
+                }
+            }
+
             int startIdx = 0;
             if (hasHeader)
             {
-                table.Add(CreateTableRow(rows[0], true));
+                table.Add(CreateTableRow(rows[0], true, alignments));
                 startIdx = 2;
             }
 
             for (int i = startIdx; i < rows.Count; i++)
             {
-                table.Add(CreateTableRow(rows[i], false));
+                table.Add(CreateTableRow(rows[i], false, alignments));
             }
 
             return table;
         }
 
-        private VisualElement CreateTableRow(string row, bool isHeader)
+        private VisualElement CreateTableRow(string row, bool isHeader, TextAnchor[] alignments)
         {
             var rowElement = new VisualElement();
             rowElement.style.flexDirection = FlexDirection.Row;
@@ -1031,7 +1232,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             rowElement.style.borderBottomColor = _theme.RuleBorder;
 
             var cellTexts = row.Trim('|').Split('|');
-            foreach (var cellText in cellTexts)
+            for (int c = 0; c < cellTexts.Length; c++)
             {
                 var cell = new VisualElement();
                 cell.style.flexGrow = 1;
@@ -1043,14 +1244,16 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 cell.style.borderRightWidth = 1;
                 cell.style.borderRightColor = _theme.RuleBorder;
 
-                ProcessCellContent(cell, cellText, isHeader);
+                TextAnchor align = (alignments != null && c < alignments.Length)
+                    ? alignments[c] : TextAnchor.MiddleLeft;
+                ProcessCellContent(cell, cellTexts[c], isHeader, align);
                 rowElement.Add(cell);
             }
 
             return rowElement;
         }
 
-        private void ProcessCellContent(VisualElement cell, string content, bool isHeader)
+        private void ProcessCellContent(VisualElement cell, string content, bool isHeader, TextAnchor align)
         {
             content = content.Trim();
             if (string.IsNullOrWhiteSpace(content)) return;
@@ -1066,7 +1269,10 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                 label.style.whiteSpace = WhiteSpace.Normal;
                 label.style.fontSize = 13;
                 label.style.color = _theme.TextBody;
+                label.style.unityTextAlign = align;
                 if (isHeader) label.style.unityFontStyleAndWeight = FontStyle.Bold;
+                if (_processedLinks.Count > 0)
+                    AttachLinkHandlers(label, new List<string>(_processedLinks));
                 cell.Add(label);
             }
         }
@@ -1156,12 +1362,26 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
                     wrapper.style.marginTop = 20;
                     wrapper.style.marginBottom = 6;
                     break;
-                default:
-                    label.style.fontSize = 15;
+                case 4:
+                    label.style.fontSize = 16;
                     wrapper.style.marginTop = 16;
                     wrapper.style.marginBottom = 4;
                     break;
+                case 5:
+                    label.style.fontSize = 14;
+                    wrapper.style.marginTop = 14;
+                    wrapper.style.marginBottom = 4;
+                    break;
+                default: // H6+
+                    label.style.fontSize = 13;
+                    label.style.color = _theme.TextMuted;
+                    wrapper.style.marginTop = 12;
+                    wrapper.style.marginBottom = 4;
+                    break;
             }
+
+            if (_processedLinks.Count > 0)
+                AttachLinkHandlers(label, new List<string>(_processedLinks));
 
             wrapper.Add(label);
 
@@ -1178,17 +1398,54 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             label.style.fontSize = 14;
             label.style.color = _theme.TextBody;
             label.style.marginBottom = 6;
+            if (_processedLinks.Count > 0)
+                AttachLinkHandlers(label, new List<string>(_processedLinks));
             return label;
         }
 
         private VisualElement CreateListItem(string line)
         {
+            // Calculate nesting depth from leading whitespace (2 spaces per level).
+            int indent = 0;
+            foreach (char c in line)
+            {
+                if (c == ' ') indent++;
+                else if (c == '\t') indent += 4;
+                else break;
+            }
+            int nestLevel = indent / 2;
+
             var container = new VisualElement();
             container.style.flexDirection = FlexDirection.Row;
-            container.style.marginLeft = 20;
+            container.style.marginLeft = 20 + nestLevel * 18;
             container.style.marginBottom = 3;
 
             var trimmed = line.TrimStart();
+
+            // Task list detection: - [ ] or - [x]
+            var taskMatch = RxTaskList.Match(trimmed);
+            if (taskMatch.Success)
+            {
+                bool isChecked = taskMatch.Groups[2].Value != " ";
+                var checkbox = new Label(isChecked ? "\u2611" : "\u2610");
+                checkbox.style.fontSize = 14;
+                checkbox.style.marginRight = 6;
+                checkbox.style.color = isChecked ? _theme.Heading : _theme.TextMuted;
+                container.Add(checkbox);
+
+                string taskText = taskMatch.Groups[3].Value;
+                var taskLabel = new Label(ProcessRichText(taskText));
+                taskLabel.enableRichText = true;
+                taskLabel.style.whiteSpace = WhiteSpace.Normal;
+                taskLabel.style.fontSize = 14;
+                taskLabel.style.color = _theme.TextBody;
+                taskLabel.style.flexGrow = 1;
+                if (_processedLinks.Count > 0)
+                    AttachLinkHandlers(taskLabel, new List<string>(_processedLinks));
+                container.Add(taskLabel);
+                return container;
+            }
+
             var bullet = new Label("\u2022");
             if (RxOrderedList.IsMatch(trimmed))
             {
@@ -1212,36 +1469,14 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             label.style.fontSize = 14;
             label.style.color = _theme.TextBody;
             label.style.flexGrow = 1;
+            if (_processedLinks.Count > 0)
+                AttachLinkHandlers(label, new List<string>(_processedLinks));
             container.Add(label);
 
             return container;
         }
 
-        private VisualElement CreateBlockquote(string line)
-        {
-            var container = new VisualElement();
-            container.style.marginLeft = 12;
-            container.style.marginTop = 8;
-            container.style.marginBottom = 8;
-            container.style.paddingLeft = 16;
-            container.style.paddingTop = 4;
-            container.style.paddingBottom = 4;
-            container.style.borderLeftWidth = 3;
-            container.style.borderLeftColor = _theme.BlockquoteBorder;
-
-            string text = line.TrimStart().Substring(1).Trim();
-            var label = new Label(ProcessRichText(text));
-            label.enableRichText = true;
-            label.style.whiteSpace = WhiteSpace.Normal;
-            label.style.fontSize = 14;
-            label.style.color = _theme.BlockquoteText;
-            label.style.unityFontStyleAndWeight = FontStyle.Italic;
-            container.Add(label);
-
-            return container;
-        }
-
-        private VisualElement CreateCodeBlock(string code)
+        private VisualElement CreateCodeBlock(string code, string language)
         {
             var container = new VisualElement();
             container.style.backgroundColor = _theme.CodeBackground;
@@ -1263,6 +1498,17 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             container.style.borderBottomColor = _theme.RuleBorder;
             container.style.borderLeftColor = _theme.RuleBorder;
             container.style.borderRightColor = _theme.RuleBorder;
+
+            if (!string.IsNullOrEmpty(language))
+            {
+                var langLabel = new Label(language);
+                langLabel.style.fontSize = 10;
+                langLabel.style.color = _theme.TextMuted;
+                langLabel.style.marginBottom = 6;
+                if (MonoFont != null)
+                    langLabel.style.unityFont = MonoFont;
+                container.Add(langLabel);
+            }
 
             var label = new Label(WebUtility.HtmlDecode(code));
             if (MonoFont != null)
@@ -1339,6 +1585,51 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             return container;
         }
 
+        private void AttachLinkHandlers(Label label, List<string> urls)
+        {
+            label.style.cursor = LinkCursor;
+            label.tooltip = urls.Count == 1 ? urls[0] : string.Join("\n", urls);
+
+            var captured = urls;
+            label.RegisterCallback<ClickEvent>(_ =>
+            {
+                if (captured.Count == 1)
+                {
+                    OpenLink(captured[0]);
+                }
+                else
+                {
+                    var menu = new GenericMenu();
+                    foreach (var url in captured)
+                    {
+                        var u = url;
+                        menu.AddItem(new GUIContent(u), false, () => OpenLink(u));
+                    }
+                    menu.ShowAsContext();
+                }
+            });
+        }
+
+        private void OpenLink(string url)
+        {
+            if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+            {
+                Application.OpenURL(url);
+            }
+            else
+            {
+                // Attempt to open a relative .md path inside the viewer.
+                string basePath = Path.GetDirectoryName(_filePath) ?? "";
+                string resolved = Path.Combine(basePath, url).Replace("\\", "/");
+                if (resolved.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && FileExists(resolved))
+                    OpenFile(resolved);
+                else
+                    Application.OpenURL(url);
+            }
+        }
+
         private static string StripMarkdownFormatting(string text)
         {
             if (string.IsNullOrEmpty(text)) return "";
@@ -1348,6 +1639,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
             text = RxItalic.Replace(text, "$2");
             text = RxInlineCode.Replace(text, "$1");
             text = RxLink.Replace(text, "$1");
+            text = RxRefLink.Replace(text, "$1");
             text = RxStripTags.Replace(text, "");
             text = RxEscape.Replace(text, "$1");
             return text.Trim();
@@ -1357,16 +1649,110 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         {
             if (string.IsNullOrEmpty(text)) return "";
 
+            _processedLinks.Clear();
             text = WebUtility.HtmlDecode(text);
+
+            // Escape backslash sequences to PUA chars so they don't trigger markdown patterns.
+            text = RxEscape.Replace(text, m => ((char)(0xE000 + m.Groups[1].Value[0])).ToString());
+
+            // Map inline HTML tags to rich text using \x03/\x04 as tag delimiters
+            // so they survive the angle-bracket escaping on the next line.
+            text = RxInlineHtml.Replace(text, m =>
+            {
+                string slash = m.Groups[1].Value;
+                string tag = m.Groups[2].Value.ToLowerInvariant();
+                switch (tag)
+                {
+                    case "strong":
+                    case "b": return slash == "/" ? "\x03/b\x04" : "\x03b\x04";
+                    case "em":
+                    case "i": return slash == "/" ? "\x03/i\x04" : "\x03i\x04";
+                    case "s":
+                    case "del": return slash == "/" ? "\x03/s\x04" : "\x03s\x04";
+                    case "u": return slash == "/" ? "\x03/u\x04" : "\x03u\x04";
+                    case "kbd":
+                        return slash == "/" ? "\x03/color\x04" : $"\x03color={_theme.InlineCodeColor}\x04";
+                    case "mark":
+                        return slash == "/" ? "\x03/color\x04" : "\x03color=#e3b341\x04";
+                    case "sup":
+                    case "sub":
+                        return slash == "/" ? "\x03/size\x04" : "\x03size=10\x04";
+                    default: return "";
+                }
+            });
+
+            // Strip block-level HTML tags (p, div, details, summary, br, etc.).
+            text = RxBlockHtml.Replace(text, "");
+
+            // Protect bare URLs and emails from markdown pattern mangling (e.g., underscores in URLs).
+            // Replace with \x05INDEX\x06 placeholders, restore after markdown processing.
+            var urlPlaceholders = new List<string>();
+            text = RxBareUrl.Replace(text, m =>
+            {
+                int idx = urlPlaceholders.Count;
+                urlPlaceholders.Add(m.Value);
+                return $"\x05{idx}\x06";
+            });
+
+            // Escape actual angle brackets from content.
             text = text.Replace("<", "\x01").Replace(">", "\x02");
 
             text = RxBold.Replace(text, "<b>$2</b>");
             text = RxItalic.Replace(text, "<i>$2</i>");
+            text = RxStrikethrough.Replace(text, "<s>$1</s>");
             text = RxInlineCode.Replace(text, $"<color={_theme.InlineCodeColor}>$1</color>");
 
+            // Inline links: [text](url) → styled text
+            text = RxInlineLink.Replace(text, m =>
+            {
+                _processedLinks.Add(m.Groups[2].Value);
+                return $"<color={_theme.LinkColor}><u>{m.Groups[1].Value}</u></color>";
+            });
+
+            // Reference links: [text][ref] → resolve and style
+            text = RxRefLink.Replace(text, m =>
+            {
+                string linkText = m.Groups[1].Value;
+                string refKey = m.Groups[2].Value;
+                if (string.IsNullOrEmpty(refKey)) refKey = linkText;
+                if (_references.TryGetValue(refKey, out var refUrl))
+                {
+                    _processedLinks.Add(refUrl);
+                    return $"<color={_theme.LinkColor}><u>{linkText}</u></color>";
+                }
+                return m.Value;
+            });
+
+            // Restore bare URL placeholders as styled links.
+            for (int u = 0; u < urlPlaceholders.Count; u++)
+            {
+                _processedLinks.Add(urlPlaceholders[u]);
+                text = text.Replace($"\x05{u}\x06", $"<color={_theme.LinkColor}><u>{urlPlaceholders[u]}</u></color>");
+            }
+
+            // Bare emails: user@example.com → styled text
+            text = RxBareEmail.Replace(text, m =>
+            {
+                _processedLinks.Add("mailto:" + m.Value);
+                return $"<color={_theme.LinkColor}>{m.Value}</color>";
+            });
+
+            // Restore inline HTML rich text tags (from \x03/\x04 placeholders).
+            text = text.Replace("\x03", "<").Replace("\x04", ">");
+
+            // Restore escaped angle brackets as visible characters.
             text = text.Replace("\x01", "<noparse><</noparse>").Replace("\x02", "<noparse>></noparse>");
 
-            return text;
+            // Restore escaped characters from PUA range.
+            var sb = new StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                if (ch >= '\uE000' && ch <= '\uE0FF')
+                    sb.Append((char)(ch - 0xE000));
+                else
+                    sb.Append(ch);
+            }
+            return sb.ToString();
         }
     }
 }

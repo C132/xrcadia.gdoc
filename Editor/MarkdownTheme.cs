@@ -25,6 +25,7 @@ namespace Xrcadia.GoogleDocMarkdown.Editor
         public abstract Color BlockquoteBorder { get; }
         public abstract Color BlockquoteText { get; }
         public abstract string InlineCodeColor { get; }
+        public virtual string LinkColor => IsLight ? "#0969da" : "#58a6ff";
 
         public static IReadOnlyList<MarkdownTheme> All { get; } = new MarkdownTheme[]
         {

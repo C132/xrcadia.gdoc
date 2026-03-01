@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-02-28
+
+### Added
+- **Strikethrough rendering.** Inline `~~text~~` syntax now renders with strikethrough styling using Unity rich text `<s>` tags.
+- **Link rendering.** Inline links `[text](url)` and reference-style links `[text][ref]` now display as colored underlined text instead of leaking raw markdown syntax. Link color is theme-aware via a new `LinkColor` property on `MarkdownTheme`.
+- **Escaped character support.** Backslash-escaped special characters (`\*`, `\_`, `\[`, etc.) now render as literal characters instead of triggering markdown patterns.
+- **Tilde-fenced code blocks.** Code blocks fenced with `~~~` are now rendered identically to backtick-fenced blocks.
+- **Indented code blocks.** Lines indented with 4+ spaces (preceded by a blank line) now render as code blocks.
+- **Code block language labels.** The language identifier after opening fences (e.g., ` ```csharp `) is displayed as a muted label above the code content.
+- **Task list support.** List items with `- [ ]` and `- [x]` syntax render with checkbox characters and appropriate styling.
+- **Nested list indentation.** List items at different indentation levels now render with proportional left margins based on leading whitespace depth.
+- **Multi-line blockquote grouping.** Consecutive `>` lines are accumulated into a single blockquote container with recursive content rendering, supporting headings, lists, code blocks, and tables inside blockquotes.
+- **Nested blockquotes.** Lines with multiple `>` prefixes (e.g., `> > nested`) render as visually nested blockquote containers.
+- **GitHub-style alerts and admonitions.** Blockquotes starting with `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]` render as styled alert boxes with colored left borders and bold type labels.
+- **Table column alignment.** Separator rows with `:` markers (`:---`, `:---:`, `---:`) now apply left, center, or right text alignment to table cells.
+- **Inline HTML support.** Common HTML tags (`<strong>`, `<em>`, `<b>`, `<i>`, `<s>`, `<del>`, `<u>`, `<kbd>`, `<mark>`, `<sup>`, `<sub>`) are mapped to Unity rich text equivalents instead of being displayed as raw tags.
+- **Bare URL auto-linking.** URLs starting with `http://` or `https://` are automatically rendered as colored underlined links without requiring markdown link syntax. URL-internal underscores are protected from italic regex mangling.
+- **Bare email auto-linking.** Email addresses like `user@example.com` are automatically rendered with link styling.
+- **Block-level HTML tag stripping.** Block HTML tags (`<p>`, `<div>`, `<details>`, `<summary>`, `<br>`, etc.) are silently removed instead of being displayed as raw text.
+- **Distinct H4/H5/H6 heading sizes.** Heading levels 4, 5, and 6 now render at 16px, 14px, and 13px respectively instead of sharing a single fallback size. H6 also uses muted text color for visual hierarchy.
+- **Clickable links.** Clicking rendered links opens external URLs in the system browser and relative `.md` paths within the viewer. Labels with links display a hand cursor and URL tooltip. Paragraphs with multiple links show a dropdown menu on click.
+
+### Changed
+- **Blockquote rendering refactored to recursive model.** Blockquotes now use `RenderMarkdownLines` recursively, enabling full block-level content (headings, lists, code blocks, tables) inside blockquotes instead of plain text only.
+- **Main parse loop extracted to `RenderMarkdownLines`.** The line-by-line rendering logic is now a reusable method that accepts any `VisualElement` parent, enabling recursive rendering for nested structures like blockquotes and alerts.
+
 ## [1.5.0] - 2026-02-27
 
 ### Added
